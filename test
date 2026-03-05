@@ -63,29 +63,25 @@
 /* ---- Column Cells ---- */
 /* Fixed-width utility columns */
 .cellCheckbox {
-  width: 40px;
-  flex-shrink: 0;
+  flex: 0 0 36px;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
 .cellIcon {
-  width: 40px;
-  flex-shrink: 0;
+  flex: 0 0 32px;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
-/* Explicit widths to strictly control spacing without flex-grow */
+/* Flexible data columns — proportional sizing */
 .cellName {
-  /* Give Name a large width to increase the gap before Size */
-  width: 35%;
-  min-width: 250px;
+  flex: 2 1 0%;
+  min-width: 150px;
   display: flex;
   align-items: center;
-  gap: 8px;
   padding-right: 12px;
   overflow: hidden;
 }
@@ -99,16 +95,14 @@
 }
 
 .cellSharing {
-  width: 60px;
-  flex-shrink: 0;
+  flex: 0 0 44px;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
 .cellFavorite {
-  width: 40px;
-  flex-shrink: 0;
+  flex: 0 0 32px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -116,8 +110,7 @@
 
 /* Fixed-width data columns to keep them tight on the right */
 .cellSize {
-  width: 10%;
-  min-width: 70px;
+  flex: 0 0 80px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
@@ -127,8 +120,7 @@
 }
 
 .cellType {
-  width: 10%;
-  min-width: 70px;
+  flex: 0 0 80px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
@@ -138,8 +130,7 @@
 }
 
 .cellTags {
-  width: 15%;
-  min-width: 100px;
+  flex: 0 0 140px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -170,8 +161,7 @@
 }
 
 .cellDate {
-  width: 15%;
-  min-width: 100px;
+  flex: 0 0 120px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
@@ -181,8 +171,7 @@
 }
 
 .cellOwner {
-  width: 10%;
-  min-width: 70px;
+  flex: 0 0 100px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
@@ -192,8 +181,7 @@
 }
 
 .cellDelete {
-  width: 40px;
-  flex-shrink: 0;
+  flex: 0 0 36px;
   display: flex;
   align-items: center;
   justify-content: center;
