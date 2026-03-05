@@ -14,7 +14,7 @@
 
 /* ---- Header Row ---- */
 .headerRow {
-  display: flex;
+  display: grid;
   align-items: center;
   padding: 8px 12px;
   border-bottom: 2px solid #e0e0e0;
@@ -39,7 +39,7 @@
 
 /* ---- Table Row ---- */
 .tableRow {
-  display: flex;
+  display: grid;
   align-items: center;
   padding: 6px 12px;
   border-bottom: 1px solid #f0f0f0;
@@ -60,6 +60,18 @@
 
 .tableRow.selected:hover {
   background-color: rgba(25, 118, 210, 0.15);
+}
+
+/* Grid Layouts depending on isRootView (hidden columns) */
+.standardGrid {
+  /* Checkbox(36) Icon(32) Name(1fr) Sharing(60) Fav(40) Size(75) Type(55) Tags(200) Date(120) Owner(120) Del(40) */
+  grid-template-columns: 36px 32px minmax(160px, 1fr) 60px 40px 75px 60px 200px 120px 120px 40px;
+}
+
+.rootGrid {
+  /* No Checkbox, Fav, or Type */
+  /* Icon(32) Name(1fr) Sharing(60) Size(75) Tags(200) Date(120) Owner(120) Del(40) */
+  grid-template-columns: 32px minmax(160px, 1fr) 60px 75px 200px 120px 120px 40px;
 }
 
 /* ---- Column Cells ---- */
@@ -168,11 +180,17 @@
   overflow-y: hidden;
   padding-right: 16px;
   -ms-overflow-style: none;
-  scrollbar-width: none;
+  scrollbar-width: thin;
+  /* Show scrollbar as requested */
 }
 
 .cellTags::-webkit-scrollbar {
-  display: none;
+  height: 4px;
+}
+
+.cellTags::-webkit-scrollbar-thumb {
+  background: #ccc;
+  border-radius: 4px;
 }
 
 .tag {
@@ -197,11 +215,24 @@
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-x: auto;
+  /* Scrollable per user request */
+  overflow-y: hidden;
+  text-overflow: clip;
+  /* Clip instead of ellipsis so they can scroll */
   padding-right: 16px;
   display: flex;
   align-items: center;
+  scrollbar-width: thin;
+}
+
+.cellDate::-webkit-scrollbar {
+  height: 4px;
+}
+
+.cellDate::-webkit-scrollbar-thumb {
+  background: #ccc;
+  border-radius: 4px;
 }
 
 .cellOwner {
