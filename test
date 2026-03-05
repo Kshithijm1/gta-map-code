@@ -1,42 +1,48 @@
 /* ============================================
    Row-Based Folder Structure Table Styles
-   Single table layout for guaranteed alignment
    ============================================ */
 
-/* Scroll wrapper */
-.tableScroll {
-  flex: 1;
-  overflow: auto;
-}
-
-/* The actual table — headerRow + tableBody are inside this */
+/* Container */
 .tableContainer {
-  display: table;
-  table-layout: fixed;
-  width: 100%;
-  border-collapse: collapse;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 /* ---- Header Row ---- */
 .headerRow {
-  display: table-row;
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 2px solid #e0e0e0;
   background-color: #fafafa;
   font-weight: 600;
   font-size: 13px;
   color: #616161;
   user-select: none;
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 2;
 }
 
 /* ---- Table Body ---- */
 .tableBody {
-  display: table-row-group;
+  flex: 1;
+  overflow-y: auto;
 }
 
 /* ---- Table Row ---- */
 .tableRow {
-  display: table-row;
+  display: flex;
+  align-items: center;
+  padding: 6px 12px;
+  border-bottom: 1px solid #f0f0f0;
   cursor: pointer;
   transition: background-color 0.15s ease;
+  min-height: 44px;
   user-select: none;
 }
 
@@ -52,35 +58,30 @@
   background-color: rgba(25, 118, 210, 0.15);
 }
 
-/* ============================================
-   Column Cells — all table-cell
-   ============================================ */
-
+/* ---- Column Cells ---- */
 .cellCheckbox {
-  display: table-cell;
-  width: 36px;
-  vertical-align: middle;
-  text-align: center;
-  padding: 6px 2px;
+  width: 40px;
+  min-width: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .cellIcon {
-  display: table-cell;
-  width: 32px;
-  vertical-align: middle;
-  text-align: center;
-  padding: 6px 2px;
+  width: 36px;
+  min-width: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .cellName {
-  display: table-cell;
-  vertical-align: middle;
-  padding: 6px 8px 6px 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 0;
-  /* forces truncation in table-cell */
+  flex: 1;
+  min-width: 200px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 8px;
 }
 
 .nameText {
@@ -89,52 +90,72 @@
   white-space: nowrap;
   font-size: 14px;
   color: #212121;
-  display: block;
-}
-
-.cellSharing {
-  display: table-cell;
-  width: 50px;
-  vertical-align: middle;
-  text-align: center;
-  padding: 6px 2px;
 }
 
 .cellFavorite {
-  display: table-cell;
   width: 36px;
-  vertical-align: middle;
-  text-align: center;
-  padding: 6px 2px;
+  min-width: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cellDate {
+  width: 120px;
+  min-width: 120px;
+  font-size: 13px;
+  color: #757575;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-right: 14px;
+}
+
+.cellOwner {
+  width: 110px;
+  min-width: 110px;
+  font-size: 13px;
+  color: #757575;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-right: 14px;
 }
 
 .cellSize {
-  display: table-cell;
   width: 70px;
-  vertical-align: middle;
+  min-width: 70px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
-  padding: 6px 4px;
 }
 
 .cellType {
-  display: table-cell;
-  width: 50px;
-  vertical-align: middle;
+  width: 80px;
+  min-width: 80px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
-  padding: 6px 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .cellTags {
-  display: table-cell;
-  width: 150px;
-  vertical-align: middle;
-  padding: 6px 4px;
-  white-space: nowrap;
-  overflow: hidden;
+  width: 130px;
+  min-width: 130px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-right: 14px;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.cellTags::-webkit-scrollbar {
+  display: none;
 }
 
 .tag {
@@ -149,39 +170,24 @@
   border: 1px solid #e2e8f0;
   white-space: nowrap;
   transition: all 0.2s ease;
-  margin-right: 4px;
 }
 
-.cellDate {
-  display: table-cell;
-  width: 160px;
-  vertical-align: middle;
-  font-size: 13px;
-  color: #757575;
-  white-space: nowrap;
-  padding: 6px 4px;
-}
-
-.cellOwner {
-  display: table-cell;
-  width: 100px;
-  vertical-align: middle;
-  font-size: 13px;
-  color: #757575;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  padding: 6px 4px;
+.cellSharing {
+  width: 50px;
+  min-width: 50px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .cellDelete {
-  display: table-cell;
-  width: 36px;
-  vertical-align: middle;
-  text-align: center;
+  width: 40px;
+  min-width: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: #757575;
   cursor: pointer;
-  padding: 6px 2px;
 }
 
 .cellDelete:hover {
@@ -189,7 +195,8 @@
 }
 
 .cellSpacer {
-  display: none;
+  flex: 1;
+  min-width: 0;
 }
 
 /* ---- Icons ---- */
@@ -202,6 +209,7 @@
   font-size: 22px !important;
 }
 
+/* Specific File Type Colors */
 .pdfIcon {
   color: #f44336;
 }
@@ -261,13 +269,12 @@
 
 /* Header column text */
 .headerCell {
+  display: flex;
+  align-items: center;
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: #9e9e9e;
-  padding-top: 10px !important;
-  padding-bottom: 10px !important;
-  border-bottom: 2px solid #e0e0e0;
 }
 
 /* Empty state */
