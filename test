@@ -9,12 +9,11 @@
   height: 100%;
   overflow-x: auto;
   overflow-y: auto;
-  /* Both scrolls on container ensures header & body align */
 }
 
 /* ---- Header Row ---- */
 .headerRow {
-  display: grid;
+  display: flex;
   align-items: center;
   padding: 8px 12px;
   border-bottom: 2px solid #e0e0e0;
@@ -27,19 +26,16 @@
   position: sticky;
   top: 0;
   z-index: 2;
-  min-width: 1050px;
-  /* guarantees columns don't squish */
 }
 
 /* ---- Table Body ---- */
 .tableBody {
   flex: 1;
-  /* overflow handled by parent */
 }
 
 /* ---- Table Row ---- */
 .tableRow {
-  display: grid;
+  display: flex;
   align-items: center;
   padding: 6px 12px;
   border-bottom: 1px solid #f0f0f0;
@@ -47,7 +43,6 @@
   transition: background-color 0.15s ease;
   min-height: 44px;
   user-select: none;
-  min-width: 1050px;
 }
 
 .tableRow:hover {
@@ -62,20 +57,9 @@
   background-color: rgba(25, 118, 210, 0.15);
 }
 
-/* Grid Layouts depending on isRootView (hidden columns) */
-.standardGrid {
-  /* Checkbox(36) Icon(32) Name(1fr) Sharing(60) Fav(40) Size(75) Type(55) Tags(200) Date(120) Owner(120) Del(40) */
-  grid-template-columns: 36px 32px minmax(160px, 1fr) 60px 40px 75px 60px 200px 120px 120px 40px;
-}
-
-.rootGrid {
-  /* No Checkbox, Fav, or Type */
-  /* Icon(32) Name(1fr) Sharing(60) Size(75) Tags(200) Date(120) Owner(120) Del(40) */
-  grid-template-columns: 32px minmax(160px, 1fr) 60px 75px 200px 120px 120px 40px;
-}
-
-/* ---- Column Cells ---- */
-/* Bulletproof Alignment: Fixed widths for all except Name */
+/* ============================================
+   Column Cells — ALL fixed widths for alignment
+   ============================================ */
 
 .cellCheckbox {
   flex: 0 0 36px;
@@ -97,14 +81,15 @@
   justify-content: center;
 }
 
-/* Name takes all remaining space. Must have min-width: 0 to allow truncating */
 .cellName {
-  flex: 1 1 0;
-  min-width: 0;
+  flex: 0 0 220px;
+  width: 220px;
+  min-width: 220px;
+  max-width: 220px;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding-right: 16px;
+  padding-right: 12px;
   overflow: hidden;
 }
 
@@ -117,80 +102,71 @@
 }
 
 .cellSharing {
-  flex: 0 0 60px;
-  width: 60px;
-  min-width: 60px;
-  max-width: 60px;
+  flex: 0 0 50px;
+  width: 50px;
+  min-width: 50px;
+  max-width: 50px;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
 .cellFavorite {
-  flex: 0 0 40px;
-  width: 40px;
-  min-width: 40px;
-  max-width: 40px;
+  flex: 0 0 36px;
+  width: 36px;
+  min-width: 36px;
+  max-width: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
 .cellSize {
-  flex: 0 0 75px;
-  width: 75px;
-  min-width: 75px;
-  max-width: 75px;
+  flex: 0 0 70px;
+  width: 70px;
+  min-width: 70px;
+  max-width: 70px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  padding-right: 16px;
   display: flex;
   align-items: center;
 }
 
 .cellType {
-  flex: 0 0 55px;
-  width: 55px;
-  min-width: 55px;
-  max-width: 55px;
-  /* Reduced width per user request */
+  flex: 0 0 50px;
+  width: 50px;
+  min-width: 50px;
+  max-width: 50px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  padding-right: 16px;
   display: flex;
   align-items: center;
 }
 
+/* Tags — scrollable horizontally */
 .cellTags {
-  flex: 0 0 200px;
-  width: 200px;
-  min-width: 200px;
-  max-width: 200px;
+  flex: 0 0 150px;
+  width: 150px;
+  min-width: 150px;
+  max-width: 150px;
   display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: nowrap;
   overflow-x: auto;
   overflow-y: hidden;
-  padding-right: 16px;
   -ms-overflow-style: none;
-  scrollbar-width: thin;
-  /* Show scrollbar as requested */
+  scrollbar-width: none;
 }
 
 .cellTags::-webkit-scrollbar {
-  height: 4px;
-}
-
-.cellTags::-webkit-scrollbar-thumb {
-  background: #ccc;
-  border-radius: 4px;
+  display: none;
 }
 
 .tag {
@@ -207,54 +183,46 @@
   transition: all 0.2s ease;
 }
 
+/* Date — scrollable horizontally */
 .cellDate {
-  flex: 0 0 120px;
-  width: 120px;
-  min-width: 120px;
-  max-width: 120px;
+  flex: 0 0 160px;
+  width: 160px;
+  min-width: 160px;
+  max-width: 160px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
   overflow-x: auto;
-  /* Scrollable per user request */
   overflow-y: hidden;
-  text-overflow: clip;
-  /* Clip instead of ellipsis so they can scroll */
-  padding-right: 16px;
   display: flex;
   align-items: center;
-  scrollbar-width: thin;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
 
 .cellDate::-webkit-scrollbar {
-  height: 4px;
-}
-
-.cellDate::-webkit-scrollbar-thumb {
-  background: #ccc;
-  border-radius: 4px;
+  display: none;
 }
 
 .cellOwner {
-  flex: 0 0 120px;
-  width: 120px;
-  min-width: 120px;
-  max-width: 120px;
+  flex: 0 0 100px;
+  width: 100px;
+  min-width: 100px;
+  max-width: 100px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  padding-right: 16px;
   display: flex;
   align-items: center;
 }
 
 .cellDelete {
-  flex: 0 0 40px;
-  width: 40px;
-  min-width: 40px;
-  max-width: 40px;
+  flex: 0 0 36px;
+  width: 36px;
+  min-width: 36px;
+  max-width: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -281,7 +249,6 @@
   font-size: 22px !important;
 }
 
-/* Specific File Type Colors */
 .pdfIcon {
   color: #f44336;
 }
