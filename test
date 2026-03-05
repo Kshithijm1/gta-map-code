@@ -67,6 +67,9 @@
 
 .cellCheckbox {
   flex: 0 0 36px;
+  width: 36px;
+  min-width: 36px;
+  max-width: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -74,6 +77,9 @@
 
 .cellIcon {
   flex: 0 0 32px;
+  width: 32px;
+  min-width: 32px;
+  max-width: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -100,6 +106,9 @@
 
 .cellSharing {
   flex: 0 0 60px;
+  width: 60px;
+  min-width: 60px;
+  max-width: 60px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -107,13 +116,19 @@
 
 .cellFavorite {
   flex: 0 0 40px;
+  width: 40px;
+  min-width: 40px;
+  max-width: 40px;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
 .cellSize {
-  flex: 0 0 100px;
+  flex: 0 0 75px;
+  width: 75px;
+  min-width: 75px;
+  max-width: 75px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
@@ -125,7 +140,10 @@
 }
 
 .cellType {
-  flex: 0 0 80px;
+  flex: 0 0 55px;
+  width: 55px;
+  min-width: 55px;
+  max-width: 55px;
   /* Reduced width per user request */
   font-size: 13px;
   color: #757575;
@@ -139,6 +157,9 @@
 
 .cellTags {
   flex: 0 0 200px;
+  width: 200px;
+  min-width: 200px;
+  max-width: 200px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -170,6 +191,9 @@
 
 .cellDate {
   flex: 0 0 120px;
+  width: 120px;
+  min-width: 120px;
+  max-width: 120px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
@@ -182,6 +206,9 @@
 
 .cellOwner {
   flex: 0 0 120px;
+  width: 120px;
+  min-width: 120px;
+  max-width: 120px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
@@ -194,6 +221,9 @@
 
 .cellDelete {
   flex: 0 0 40px;
+  width: 40px;
+  min-width: 40px;
+  max-width: 40px;
   display: flex;
   align-items: center;
   justify-content: center;
