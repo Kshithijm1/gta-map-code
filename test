@@ -78,8 +78,8 @@
 
 /* Flexible data columns — proportional sizing */
 .cellName {
-  flex: 2.5 1 0%;
-  min-width: 100px;
+  flex: 1 1 0%;
+  min-width: 150px;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -109,9 +109,9 @@
   justify-content: center;
 }
 
+/* Fixed-width data columns to keep them tight on the right */
 .cellSize {
-  flex: 1 1 0%;
-  min-width: 50px;
+  flex: 0 0 80px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
@@ -121,8 +121,7 @@
 }
 
 .cellType {
-  flex: 1 1 0%;
-  min-width: 50px;
+  flex: 0 0 80px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
@@ -132,8 +131,7 @@
 }
 
 .cellTags {
-  flex: 1.2 1 0%;
-  min-width: 60px;
+  flex: 0 0 140px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -164,8 +162,7 @@
 }
 
 .cellDate {
-  flex: 1.2 1 0%;
-  min-width: 70px;
+  flex: 0 0 120px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
@@ -175,8 +172,7 @@
 }
 
 .cellOwner {
-  flex: 1 1 0%;
-  min-width: 50px;
+  flex: 0 0 100px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
