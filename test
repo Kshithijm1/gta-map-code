@@ -15,12 +15,14 @@
 .headerRow {
   display: flex;
   align-items: center;
-  padding: 8px 12px;
+  padding: 6px 12px;
   border-bottom: 2px solid #e0e0e0;
   background-color: #fafafa;
   font-weight: 600;
-  font-size: 13px;
-  color: #616161;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #9e9e9e;
   user-select: none;
   flex-shrink: 0;
   position: sticky;
@@ -58,21 +60,28 @@
   background-color: rgba(25, 118, 210, 0.15);
 }
 
-/* ---- Column Cells ---- */
+/* ---- Column Cells ----
+   Every cell has overflow:hidden so header text
+   cannot push cells beyond their fixed widths. */
+
 .cellCheckbox {
   width: 40px;
   min-width: 40px;
+  max-width: 40px;
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
 }
 
 .cellIcon {
   width: 36px;
   min-width: 36px;
+  max-width: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
 }
 
 .cellName {
@@ -82,6 +91,7 @@
   align-items: center;
   gap: 8px;
   padding-right: 8px;
+  overflow: hidden;
 }
 
 .nameText {
@@ -95,14 +105,17 @@
 .cellFavorite {
   width: 36px;
   min-width: 36px;
+  max-width: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
 }
 
 .cellDate {
   width: 120px;
   min-width: 120px;
+  max-width: 120px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
@@ -114,6 +127,7 @@
 .cellOwner {
   width: 110px;
   min-width: 110px;
+  max-width: 110px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
@@ -125,14 +139,18 @@
 .cellSize {
   width: 70px;
   min-width: 70px;
+  max-width: 70px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .cellType {
   width: 80px;
   min-width: 80px;
+  max-width: 80px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
@@ -143,6 +161,7 @@
 .cellTags {
   width: 130px;
   min-width: 130px;
+  max-width: 130px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -175,19 +194,23 @@
 .cellSharing {
   width: 50px;
   min-width: 50px;
+  max-width: 50px;
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
 }
 
 .cellDelete {
   width: 40px;
   min-width: 40px;
+  max-width: 40px;
   display: flex;
   align-items: center;
   justify-content: center;
   color: #757575;
   cursor: pointer;
+  overflow: hidden;
 }
 
 .cellDelete:hover {
@@ -267,16 +290,12 @@
   color: #2e7d32;
 }
 
-/* Header column text */
+/* Header column text — no longer used, styling is on headerRow */
 .headerCell {
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: #9e9e9e;
-  flex-shrink: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 /* Empty state */
