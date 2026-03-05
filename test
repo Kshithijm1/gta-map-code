@@ -121,7 +121,7 @@
 }
 
 .cellSize {
-  flex: 1;
+  flex: 0.6;
   min-width: 0;
   font-size: 13px;
   color: #757575;
@@ -131,7 +131,7 @@
 }
 
 .cellType {
-  flex: 1;
+  flex: 0.6;
   min-width: 0;
   font-size: 13px;
   color: #757575;
@@ -149,8 +149,6 @@
   flex-wrap: nowrap;
   overflow-x: auto;
   overflow-y: hidden;
-  -ms-overflow-style: none;
-  scrollbar-width: none;
 }
 
 .cellTags::-webkit-scrollbar {
@@ -172,7 +170,7 @@
 }
 
 .cellDate {
-  flex: 1;
+  flex: 0.8;
   min-width: 0;
   font-size: 13px;
   color: #757575;
@@ -182,7 +180,7 @@
 }
 
 .cellOwner {
-  flex: 1;
+  flex: 0.6;
   min-width: 0;
   font-size: 13px;
   color: #757575;
