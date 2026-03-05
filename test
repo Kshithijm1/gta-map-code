@@ -27,7 +27,8 @@
   position: sticky;
   top: 0;
   z-index: 2;
-  min-width: min-content;
+  min-width: 1050px;
+  /* guarantees columns don't squish */
 }
 
 /* ---- Table Body ---- */
@@ -46,7 +47,7 @@
   transition: background-color 0.15s ease;
   min-height: 44px;
   user-select: none;
-  min-width: min-content;
+  min-width: 1050px;
 }
 
 .tableRow:hover {
@@ -80,11 +81,11 @@
 /* Flexible data columns — all use flex to share space proportionally */
 .cellName {
   flex: 3 1 0;
-  min-width: 120px;
+  min-width: 160px;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding-right: 8px;
+  padding-right: 16px;
   overflow: hidden;
 }
 
@@ -112,36 +113,36 @@
 
 .cellSize {
   flex: 1 1 0;
+  min-width: 80px;
+  font-size: 13px;
+  color: #757575;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-right: 16px;
+}
+
+.cellType {
+  flex: 1 1 0;
   min-width: 60px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  padding-right: 8px;
-}
-
-.cellType {
-  flex: 1 1 0;
-  min-width: 50px;
-  font-size: 13px;
-  color: #757575;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  padding-right: 8px;
+  padding-right: 16px;
 }
 
 .cellTags {
   flex: 1.5 1 0;
-  min-width: 70px;
+  min-width: 90px;
   display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: nowrap;
   overflow-x: auto;
   overflow-y: hidden;
-  padding-right: 8px;
+  padding-right: 16px;
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
@@ -166,24 +167,24 @@
 
 .cellDate {
   flex: 1.2 1 0;
+  min-width: 100px;
+  font-size: 13px;
+  color: #757575;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-right: 16px;
+}
+
+.cellOwner {
+  flex: 1 1 0;
   min-width: 80px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  padding-right: 8px;
-}
-
-.cellOwner {
-  flex: 1 1 0;
-  min-width: 60px;
-  font-size: 13px;
-  color: #757575;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  padding-right: 8px;
+  padding-right: 16px;
 }
 
 .cellDelete {
