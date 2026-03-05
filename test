@@ -78,8 +78,8 @@
 
 /* Flexible data columns — proportional sizing */
 .cellName {
-  flex: 2 1 0%;
-  min-width: 150px;
+  flex: 1.5 1 0%;
+  min-width: 120px;
   display: flex;
   align-items: center;
   padding-right: 12px;
@@ -110,7 +110,7 @@
 
 /* Fixed-width data columns to keep them tight on the right */
 .cellSize {
-  flex: 0 0 80px;
+  flex: 0 0 60px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
@@ -120,7 +120,7 @@
 }
 
 .cellType {
-  flex: 0 0 80px;
+  flex: 0 0 60px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
