@@ -269,12 +269,14 @@
 
 /* Header column text */
 .headerCell {
-  display: flex;
-  align-items: center;
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: #9e9e9e;
+  flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Empty state */
