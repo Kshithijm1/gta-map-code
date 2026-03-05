@@ -7,7 +7,9 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: auto;
+  /* Both scrolls on container ensures header & body align */
 }
 
 /* ---- Header Row ---- */
@@ -25,15 +27,13 @@
   position: sticky;
   top: 0;
   z-index: 2;
-  /* Reserve space for body scrollbar so columns align */
-  padding-right: calc(12px + 17px);
+  min-width: min-content;
 }
 
 /* ---- Table Body ---- */
 .tableBody {
   flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
+  /* overflow handled by parent */
 }
 
 /* ---- Table Row ---- */
@@ -46,6 +46,7 @@
   transition: background-color 0.15s ease;
   min-height: 44px;
   user-select: none;
+  min-width: min-content;
 }
 
 .tableRow:hover {
@@ -76,13 +77,14 @@
   justify-content: center;
 }
 
-/* Flexible data columns — proportional sizing */
+/* Flexible data columns — all use flex to share space proportionally */
 .cellName {
-  flex: 2 1 0%;
-  min-width: 150px;
+  flex: 3 1 0;
+  min-width: 120px;
   display: flex;
   align-items: center;
-  padding-right: 12px;
+  gap: 8px;
+  padding-right: 8px;
   overflow: hidden;
 }
 
@@ -108,36 +110,38 @@
   justify-content: center;
 }
 
-/* Fixed-width data columns to keep them tight on the right */
 .cellSize {
-  flex: 0 0 80px;
+  flex: 1 1 0;
+  min-width: 60px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  padding-right: 12px;
+  padding-right: 8px;
 }
 
 .cellType {
-  flex: 0 0 80px;
+  flex: 1 1 0;
+  min-width: 50px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  padding-right: 12px;
+  padding-right: 8px;
 }
 
 .cellTags {
-  flex: 0 0 140px;
+  flex: 1.5 1 0;
+  min-width: 70px;
   display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: nowrap;
   overflow-x: auto;
   overflow-y: hidden;
-  padding-right: 12px;
+  padding-right: 8px;
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
@@ -161,23 +165,25 @@
 }
 
 .cellDate {
-  flex: 0 0 120px;
+  flex: 1.2 1 0;
+  min-width: 80px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  padding-right: 12px;
+  padding-right: 8px;
 }
 
 .cellOwner {
-  flex: 0 0 100px;
+  flex: 1 1 0;
+  min-width: 60px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  padding-right: 12px;
+  padding-right: 8px;
 }
 
 .cellDelete {
@@ -187,20 +193,6 @@
   justify-content: center;
   color: #757575;
   cursor: pointer;
-}
-
-/* User requested to decrease the width of name, type, and size specifically on files/folders, not the header */
-.tableRow .cellName {
-  flex: 1.2 1 0%;
-  min-width: 100px;
-}
-
-.tableRow .cellSize {
-  flex: 0 0 50px;
-}
-
-.tableRow .cellType {
-  flex: 0 0 50px;
 }
 
 .cellDelete:hover {
