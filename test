@@ -1,0 +1,1612 @@
+import logger from "@/lib/logger";
+import { BigQuery } from "@google-cloud/bigquery";
+import { NextRequest, NextResponse } from "next/server";
+import { SECRET_PROJECT_ID, SECRET_WATCHLIST_DATASET } from "@/lib/env";
+
+const DATASET = SECRET_WATCHLIST_DATASET || "cbldt-b016-int-2e05.raw_ext_sgam_1832_aiq_interactive_ist";
+
+/**
+ * Handles multiple update operations on watchlist items:
+ *  - action: "remove"      — soft-delete item (is_active = 'N')
+ *  - action: "reorder"     — update item_rank for given items
+ *  - action: "deleteWatchlist" — soft-delete entire watchlist + its items
+ *  - action: "editWatchlist"   — update watchlist name/description
+ */
+export async function POST(req: NextRequest) {
+    logger.info("Updating watchlist item(s)");
+    try {
+        const body = await req.json();
+        const { action, user_sid } = body;
+
+        if (!user_sid || !action) {
+            return NextResponse.json(
+                { error: "user_sid and action are required" },
+                { status: 400 }
+            );
+        }
+
+        const bigQueryClient = new BigQuery({ projectId: SECRET_PROJECT_ID });
+
+        switch (action) {
+            // ── Remove a single item (soft delete) ──
+            case "remove": {
+                const { watchlist_item_id } = body;
+                if (!watchlist_item_id) {
+                    return NextResponse.json(
+                        { error: "watchlist_item_id is required for remove" },
+                        { status: 400 }
+                    );
+                }
+
+                await bigQueryClient.query({
+                    query: `
+                        UPDATE \`${DATASET}.watchlists_items\`
+                        SET is_active = 'N',
+                            last_updated_user_sid = @user_sid,
+                            _updated_ts = CURRENT_TIMESTAMP()
+                        WHERE watchlist_item_id = @watchlist_item_id
+                    `,
+                    params: {
+                        user_sid,
+                        watchlist_item_id: Number(watchlist_item_id),
+                    },
+                });
+
+                return NextResponse.json(
+                    { success: true, message: "Item removed" },
+                    { status: 200 }
+                );
+            }
+
+            // ── Reorder items ──
+            case "reorder": {
+                const { items } = body; // Array of { watchlist_item_id, item_rank }
+                if (!items || !Array.isArray(items)) {
+                    return NextResponse.json(
+                        { error: "items array is required for reorder" },
+                        { status: 400 }
+                    );
+                }
+
+                // Execute updates sequentially (BigQuery doesn't support batch DML easily)
+                for (const item of items) {
+                    await bigQueryClient.query({
+                        query: `
+                            UPDATE \`${DATASET}.watchlists_items\`
+                            SET item_rank = @item_rank,
+                                last_updated_user_sid = @user_sid,
+                                _updated_ts = CURRENT_TIMESTAMP()
+                            WHERE watchlist_item_id = @watchlist_item_id
+                        `,
+                        params: {
+                            user_sid,
+                            watchlist_item_id: Number(item.watchlist_item_id),
+                            item_rank: Number(item.item_rank),
+                        },
+                    });
+                }
+
+                return NextResponse.json(
+                    { success: true, message: "Items reordered" },
+                    { status: 200 }
+                );
+            }
+
+            // ── Delete entire watchlist (soft delete) ──
+            case "deleteWatchlist": {
+                const { watchlist_id } = body;
+                if (!watchlist_id) {
+                    return NextResponse.json(
+                        { error: "watchlist_id is required for deleteWatchlist" },
+                        { status: 400 }
+                    );
+                }
+
+                // Soft-delete the watchlist itself
+                await bigQueryClient.query({
+                    query: `
+                        UPDATE \`${DATASET}.watchlists\`
+                        SET is_active = 'N',
+                            last_updated_user_sid = @user_sid,
+                            _updated_ts = CURRENT_TIMESTAMP()
+                        WHERE watchlist_id = @watchlist_id
+                    `,
+                    params: {
+                        user_sid,
+                        watchlist_id: Number(watchlist_id),
+                    },
+                });
+
+                // Soft-delete all items in that watchlist
+                await bigQueryClient.query({
+                    query: `
+                        UPDATE \`${DATASET}.watchlists_items\`
+                        SET is_active = 'N',
+                            last_updated_user_sid = @user_sid,
+                            _updated_ts = CURRENT_TIMESTAMP()
+                        WHERE watchlist_id = @watchlist_id
+                    `,
+                    params: {
+                        user_sid,
+                        watchlist_id: Number(watchlist_id),
+                    },
+                });
+
+                return NextResponse.json(
+                    { success: true, message: "Watchlist deleted" },
+                    { status: 200 }
+                );
+            }
+
+            // ── Edit watchlist name/description ──
+            case "editWatchlist": {
+                const { watchlist_id, watchlist_name, watchlist_description } = body;
+                if (!watchlist_id) {
+                    return NextResponse.json(
+                        { error: "watchlist_id is required for editWatchlist" },
+                        { status: 400 }
+                    );
+                }
+
+                await bigQueryClient.query({
+                    query: `
+                        UPDATE \`${DATASET}.watchlists\`
+                        SET watchlist_name = @watchlist_name,
+                            watchlist_description = @watchlist_description,
+                            last_updated_user_sid = @user_sid,
+                            _updated_ts = CURRENT_TIMESTAMP()
+                        WHERE watchlist_id = @watchlist_id
+                    `,
+                    params: {
+                        user_sid,
+                        watchlist_id: Number(watchlist_id),
+                        watchlist_name: watchlist_name || "",
+                        watchlist_description: watchlist_description || "",
+                    },
+                });
+
+                return NextResponse.json(
+                    { success: true, message: "Watchlist updated" },
+                    { status: 200 }
+                );
+            }
+
+            default:
+                return NextResponse.json(
+                    { error: `Unknown action: ${action}` },
+                    { status: 400 }
+                );
+        }
+    } catch (error: any) {
+        logger.error("Error updating watchlist", error);
+        return NextResponse.json(
+            { error: error.message || "Failed to update" },
+            { status: 500 }
+        );
+    }
+}
+
+
+
+
+watchlistcontext.tsx
+
+
+
+"use client";
+import React, {
+    createContext,
+    useState,
+    useEffect,
+    useCallback,
+    ReactNode,
+    useContext,
+} from "react";
+import {
+    IWatchLists,
+    IWatchlistItem,
+    IWatchListType,
+    IWatchlistState,
+    IWatchlistEvent,
+} from "@/interface";
+import { UserContext } from "./UserContext";
+
+// ---------------------------------------------------------------------------
+// Favorites persistence (client-side only — BigQuery doesn't track favorites)
+// ---------------------------------------------------------------------------
+const FAV_STORAGE_KEY = "aiq_watchlist_favorites";
+
+const loadFavorites = (): Set<string> => {
+    try {
+        const raw = localStorage.getItem(FAV_STORAGE_KEY);
+        return raw ? new Set(JSON.parse(raw)) : new Set();
+    } catch {
+        return new Set();
+    }
+};
+
+const saveFavorites = (favs: Set<string>) => {
+    try {
+        localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify([...favs]));
+    } catch { /* silently fail */ }
+};
+
+// ---------------------------------------------------------------------------
+// Context
+// ---------------------------------------------------------------------------
+
+const defaultState: IWatchlistState = {
+    watchlists: [],
+    items: [],
+    events: [],
+    isLoading: false,
+    error: null,
+    addWatchlist: async () => { },
+    deleteWatchlist: async () => { },
+    editWatchlist: async () => { },
+    addItem: async () => { },
+    removeItem: async () => { },
+    reorderItems: async () => { },
+    getWatchlistItems: () => [],
+    getItemCount: () => 0,
+    getAllItemsForType: () => [],
+    toggleFavorite: () => { },
+    refreshWatchlists: async () => { },
+    refreshItems: async () => { },
+    refreshEvents: async () => { },
+};
+
+export const WatchlistContext = createContext<IWatchlistState>(defaultState);
+
+// ---------------------------------------------------------------------------
+// Provider
+// ---------------------------------------------------------------------------
+
+export const WatchlistProvider: React.FC<{ children: ReactNode }> = ({
+    children,
+}) => {
+    const { user } = useContext(UserContext);
+    const [watchlists, setWatchlists] = useState<IWatchLists[]>([]);
+    const [items, setItems] = useState<IWatchlistItem[]>([]);
+    const [events, setEvents] = useState<IWatchlistEvent[]>([]);
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [favorites, setFavorites] = useState<Set<string>>(new Set());
+
+    // ---- Fetch watchlists from API ----
+    const refreshWatchlists = useCallback(async () => {
+        if (!user?.sID) return;
+        try {
+            const res = await fetch("/api/watchlist/getWatchlists", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    user_sid: user.sID,
+                    team_code: user.teamCode || "",
+                }),
+            });
+            const data = await res.json();
+            if (data.watchlists) {
+                // Merge favorites from localStorage
+                const favs = loadFavorites();
+                const merged = data.watchlists.map((w: IWatchLists) => ({
+                    ...w,
+                    favorite: favs.has(w.id),
+                }));
+                setWatchlists(merged);
+                setFavorites(favs);
+            }
+        } catch (err: any) {
+            console.error("Failed to fetch watchlists:", err);
+            setError(err.message || "Failed to fetch watchlists");
+        }
+    }, [user?.sID, user?.teamCode]);
+
+    // ---- Fetch items from API ----
+    const refreshItems = useCallback(async () => {
+        if (!user?.sID) return;
+        try {
+            const res = await fetch("/api/watchlist/getWatchlistItems", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    user_sid: user.sID,
+                    team_code: user.teamCode || "",
+                }),
+            });
+            const data = await res.json();
+            if (data.items) {
+                setItems(data.items);
+            }
+        } catch (err: any) {
+            console.error("Failed to fetch watchlist items:", err);
+            setError(err.message || "Failed to fetch items");
+        }
+    }, [user?.sID, user?.teamCode]);
+
+    // ---- Fetch events from API ----
+    const refreshEvents = useCallback(async () => {
+        if (!user?.sID) return;
+        try {
+            const res = await fetch("/api/watchlist/getWatchlistEvents", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    user_sid: user.sID,
+                    team_code: user.teamCode || "",
+                }),
+            });
+            const data = await res.json();
+            if (data.events) {
+                setEvents(data.events);
+            }
+        } catch (err: any) {
+            console.error("Failed to fetch watchlist events:", err);
+            // Non-critical — events failing shouldn't block the UI
+        }
+    }, [user?.sID, user?.teamCode]);
+
+    // ---- Load on mount / user change ----
+    useEffect(() => {
+        if (!user?.sID) return;
+        setIsLoading(true);
+        setError(null);
+        Promise.all([refreshWatchlists(), refreshItems(), refreshEvents()])
+            .finally(() => setIsLoading(false));
+    }, [user?.sID, refreshWatchlists, refreshItems, refreshEvents]);
+
+    // ---- Mutations ----
+
+    const addWatchlist = useCallback(
+        async (name: string, description: string, type: IWatchListType) => {
+            if (!user?.sID) return;
+            try {
+                setIsLoading(true);
+                await fetch("/api/watchlist/addWatchlist", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        user_sid: user.sID,
+                        team_code: user.teamCode || "",
+                        access_group: user.accessGroup || "",
+                        admin_group: "",
+                        watchlist_name: name,
+                        watchlist_description: description,
+                        watchlist_access_level: type,
+                    }),
+                });
+                await refreshWatchlists();
+            } catch (err: any) {
+                setError(err.message || "Failed to create watchlist");
+            } finally {
+                setIsLoading(false);
+            }
+        },
+        [user, refreshWatchlists]
+    );
+
+    const deleteWatchlist = useCallback(
+        async (id: string) => {
+            if (!user?.sID) return;
+            try {
+                setIsLoading(true);
+                await fetch("/api/watchlist/updateItem", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        action: "deleteWatchlist",
+                        user_sid: user.sID,
+                        watchlist_id: id,
+                    }),
+                });
+                await Promise.all([refreshWatchlists(), refreshItems()]);
+            } catch (err: any) {
+                setError(err.message || "Failed to delete watchlist");
+            } finally {
+                setIsLoading(false);
+            }
+        },
+        [user?.sID, refreshWatchlists, refreshItems]
+    );
+
+    const editWatchlist = useCallback(
+        async (id: string, name: string, description: string) => {
+            if (!user?.sID) return;
+            try {
+                await fetch("/api/watchlist/updateItem", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        action: "editWatchlist",
+                        user_sid: user.sID,
+                        watchlist_id: id,
+                        watchlist_name: name,
+                        watchlist_description: description,
+                    }),
+                });
+                await refreshWatchlists();
+            } catch (err: any) {
+                setError(err.message || "Failed to update watchlist");
+            }
+        },
+        [user?.sID, refreshWatchlists]
+    );
+
+    const addItem = useCallback(
+        async (item: Omit<IWatchlistItem, "id" | "rank">) => {
+            if (!user?.sID) return;
+            try {
+                setIsLoading(true);
+                // Get current count for rank
+                const currentItems = items.filter(
+                    (i) => i.watchlistId === item.watchlistId
+                );
+                const watchlist = watchlists.find((w) => w.id === item.watchlistId);
+
+                await fetch("/api/watchlist/addItem", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        user_sid: user.sID,
+                        watchlist_id: item.watchlistId,
+                        watchlist_name: watchlist?.name || "",
+                        watchlist_access_level: item.type || "user",
+                        admin_group: "",
+                        access_group: user.accessGroup || "",
+                        team_code: user.teamCode || "",
+                        ID_BB_COMPANY: item.ID_BB_COMPANY || "",
+                        ticker: item.ticker,
+                        company_name: item.companyName,
+                        item_rank: currentItems.length + 1,
+                    }),
+                });
+                await refreshItems();
+            } catch (err: any) {
+                setError(err.message || "Failed to add item");
+            } finally {
+                setIsLoading(false);
+            }
+        },
+        [user, items, watchlists, refreshItems]
+    );
+
+    const removeItem = useCallback(
+        async (itemId: string) => {
+            if (!user?.sID) return;
+            try {
+                await fetch("/api/watchlist/updateItem", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        action: "remove",
+                        user_sid: user.sID,
+                        watchlist_item_id: itemId,
+                    }),
+                });
+                await refreshItems();
+            } catch (err: any) {
+                setError(err.message || "Failed to remove item");
+            }
+        },
+        [user?.sID, refreshItems]
+    );
+
+    const reorderItems = useCallback(
+        async (watchlistId: string, orderedIds: string[]) => {
+            if (!user?.sID) return;
+            try {
+                const reorderPayload = orderedIds.map((id, index) => ({
+                    watchlist_item_id: id,
+                    item_rank: index + 1,
+                }));
+
+                // Optimistic update locally first
+                setItems((prev) => {
+                    const otherItems = prev.filter(
+                        (i) => i.watchlistId !== watchlistId
+                    );
+                    const reordered = orderedIds
+                        .map((id, index) => {
+                            const found = prev.find((i) => i.id === id);
+                            if (!found) return null;
+                            return { ...found, rank: index + 1 };
+                        })
+                        .filter(Boolean) as IWatchlistItem[];
+                    return [...otherItems, ...reordered];
+                });
+
+                // Then persist to backend
+                await fetch("/api/watchlist/updateItem", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        action: "reorder",
+                        user_sid: user.sID,
+                        items: reorderPayload,
+                    }),
+                });
+            } catch (err: any) {
+                setError(err.message || "Failed to reorder items");
+                // Refresh to get actual state
+                await refreshItems();
+            }
+        },
+        [user?.sID, refreshItems]
+    );
+
+    const getWatchlistItems = useCallback(
+        (watchlistId: string): IWatchlistItem[] => {
+            return items
+                .filter((i) => i.watchlistId === watchlistId)
+                .sort((a, b) => a.rank - b.rank);
+        },
+        [items]
+    );
+
+    const getItemCount = useCallback(
+        (watchlistId: string): number => {
+            return items.filter((i) => i.watchlistId === watchlistId).length;
+        },
+        [items]
+    );
+
+    const getAllItemsForType = useCallback(
+        (type: IWatchListType): IWatchlistItem[] => {
+            const typeWatchlistIds = watchlists
+                .filter((w) => w.type === type)
+                .map((w) => w.id);
+            return items.filter((i) => typeWatchlistIds.includes(i.watchlistId));
+        },
+        [items, watchlists]
+    );
+
+    const toggleFavorite = useCallback((watchlistId: string) => {
+        setFavorites((prev) => {
+            const next = new Set(prev);
+            if (next.has(watchlistId)) {
+                next.delete(watchlistId);
+            } else {
+                next.add(watchlistId);
+            }
+            saveFavorites(next);
+            return next;
+        });
+        setWatchlists((prev) =>
+            prev.map((w) =>
+                w.id === watchlistId ? { ...w, favorite: !w.favorite } : w
+            )
+        );
+    }, []);
+
+    return (
+        <WatchlistContext.Provider
+            value={{
+                watchlists,
+                items,
+                events,
+                isLoading,
+                error,
+                addWatchlist,
+                deleteWatchlist,
+                editWatchlist,
+                addItem,
+                removeItem,
+                reorderItems,
+                getWatchlistItems,
+                getItemCount,
+                getAllItemsForType,
+                toggleFavorite,
+                refreshWatchlists,
+                refreshItems,
+                refreshEvents,
+            }}
+        >
+            {children}
+        </WatchlistContext.Provider>
+    );
+};
+
+
+
+
+
+usewatchlist.ts
+
+"use client";
+import { useContext, useMemo } from "react";
+import { WatchlistContext } from "@/context/WatchlistContext";
+import { IWatchlistItem, IWatchListType, IWatchlistEvent } from "@/interface";
+
+/**
+ * Convenience hook that wraps the WatchlistContext and provides
+ * derived helpers for a specific watchlist.
+ */
+export const useWatchlist = (activeWatchlistId?: string | null) => {
+    const ctx = useContext(WatchlistContext);
+
+    const activeItems: IWatchlistItem[] = useMemo(() => {
+        if (!activeWatchlistId) return [];
+        return ctx.getWatchlistItems(activeWatchlistId);
+    }, [activeWatchlistId, ctx]);
+
+    const filteredWatchlists = useMemo(
+        () => ({
+            user: ctx.watchlists.filter((w) => w.type === "user"),
+            team: ctx.watchlists.filter((w) => w.type === "team"),
+        }),
+        [ctx.watchlists]
+    );
+
+    const isDuplicateTicker = (watchlistId: string, ticker: string): boolean => {
+        return ctx.items.some(
+            (i) =>
+                i.watchlistId === watchlistId &&
+                i.ticker.toUpperCase() === ticker.toUpperCase()
+        );
+    };
+
+    // Events for the active watchlist's tickers
+    const activeEvents: IWatchlistEvent[] = useMemo(() => {
+        if (!activeWatchlistId) return [];
+        const activeTickers = new Set(
+            activeItems.map((i) => i.ticker.toUpperCase())
+        );
+        return ctx.events.filter((e) =>
+            activeTickers.has(e.ticker.toUpperCase())
+        );
+    }, [activeWatchlistId, activeItems, ctx.events]);
+
+    // Upcoming events (next 7 days)
+    const upcomingEvents: IWatchlistEvent[] = useMemo(() => {
+        const now = new Date();
+        const oneWeek = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+        return activeEvents.filter((e) => {
+            const eventDate = new Date(e.event_date);
+            return eventDate >= now && eventDate <= oneWeek;
+        });
+    }, [activeEvents]);
+
+    return {
+        ...ctx,
+        activeItems,
+        filteredWatchlists,
+        isDuplicateTicker,
+        activeEvents,
+        upcomingEvents,
+    };
+};
+
+
+
+
+
+
+
+watchlistdetail
+
+import React, { useContext, useState, useCallback, useMemo } from "react";
+import {
+    Box,
+    Typography,
+    Divider,
+    Chip,
+    Paper,
+    Button,
+    Table,
+    TableBody,
+    TableCell,
+    TableContainer,
+    TableHead,
+    TableRow,
+    IconButton,
+    Tooltip,
+    Stack,
+    Select,
+    MenuItem,
+    FormControl,
+} from "@mui/material";
+import { IWatchlistItem, IKeyInfoDocument, IWatchListType, IWatchlistEvent } from "@/interface";
+import FileDownloadOutlinedIcon from "@mui/icons-material/FileDownloadOutlined";
+import CircularProgress from "@mui/material/CircularProgress";
+import PersonOutlineIcon from "@mui/icons-material/PersonOutline";
+import GroupIcon from "@mui/icons-material/Group";
+import StarIcon from "@mui/icons-material/Star";
+import StarBorderIcon from "@mui/icons-material/StarBorder";
+import AddIcon from "@mui/icons-material/Add";
+import DragIndicatorIcon from "@mui/icons-material/DragIndicator";
+import CloseIcon from "@mui/icons-material/Close";
+import DescriptionOutlinedIcon from "@mui/icons-material/DescriptionOutlined";
+import CalendarTodayIcon from "@mui/icons-material/CalendarToday";
+import AddStockModal from "./AddStockModal";
+import { WatchlistContext } from "@/context/WatchlistContext";
+import dayjs from "dayjs";
+
+// ---------------------------------------------------------------------------
+// Shared styles
+// ---------------------------------------------------------------------------
+const TABLE_HEADER_BG = "linear-gradient(135deg, #1e3a5f 0%, #3B5BDB 50%, #5C7CFA 100%)";
+const TABLE_HEADER_CELL_SX = {
+    background: TABLE_HEADER_BG,
+    color: "#fff",
+    fontWeight: 700,
+    fontSize: "12px",
+    letterSpacing: "0.04em",
+    textTransform: "uppercase" as const,
+    borderBottom: "none",
+    py: 1.4,
+};
+
+// ---------------------------------------------------------------------------
+// Date helpers
+// ---------------------------------------------------------------------------
+const formatEarningsDate = (dateStr?: string) => {
+    if (!dateStr) return "—";
+    const d = dayjs(dateStr);
+    if (!d.isValid()) return "—";
+    return d.format("MMM D, YYYY");
+};
+
+const isUpcoming = (dateStr?: string) => {
+    if (!dateStr) return false;
+    return dayjs(dateStr).isAfter(dayjs());
+};
+
+// ---------------------------------------------------------------------------
+// Event filter types and helpers
+// ---------------------------------------------------------------------------
+type EventFilter =
+    | "All"
+    | "This Year"
+    | "This Month"
+    | "This Week"
+    | "Today"
+    | "Next Month"
+    | "Next Week"
+    | "Next Day";
+
+const EVENT_FILTERS: EventFilter[] = [
+    "All",
+    "This Year",
+    "This Month",
+    "This Week",
+    "Today",
+    "Next Month",
+    "Next Week",
+    "Next Day",
+];
+
+const passesEventFilter = (item: IWatchlistItem, filter: EventFilter): boolean => {
+    if (filter === "All") return true;
+    const next = item.nextEarnings ? dayjs(item.nextEarnings) : null;
+    if (!next || !next.isValid()) return false;
+
+    const now = dayjs();
+
+    switch (filter) {
+        case "Today":
+            return next.isSame(now, "day");
+        case "This Week":
+            return next.isSame(now, "week");
+        case "This Month":
+            return next.isSame(now, "month");
+        case "This Year":
+            return next.isSame(now, "year");
+        case "Next Day":
+            return next.isAfter(now) && next.isBefore(now.add(1, "day").endOf("day"));
+        case "Next Week":
+            return next.isAfter(now) && next.isBefore(now.add(1, "week").endOf("day"));
+        case "Next Month":
+            return next.isAfter(now) && next.isBefore(now.add(1, "month").endOf("day"));
+        default:
+            return true;
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Earnings date cell
+// ---------------------------------------------------------------------------
+const EarningsCell: React.FC<{ date?: string; isNext?: boolean }> = ({ date, isNext }) => {
+    const formatted = formatEarningsDate(date);
+    const upcoming = isNext && isUpcoming(date);
+
+    return (
+        <Box display="flex" alignItems="center" gap={0.75}>
+            <CalendarTodayIcon
+                sx={{
+                    fontSize: 14,
+                    color: upcoming ? "#3B5BDB" : "#999",
+                }}
+            />
+            <Typography
+                fontSize="13px"
+                fontWeight={upcoming ? 600 : 400}
+                sx={{ color: upcoming ? "#1e3a5f" : "#555" }}
+            >
+                {formatted}
+            </Typography>
+            {upcoming && (
+                <Chip
+                    label="Upcoming"
+                    size="small"
+                    sx={{
+                        height: 20,
+                        fontSize: "10px",
+                        fontWeight: 700,
+                        bgcolor: "rgba(59, 91, 219, 0.1)",
+                        color: "#3B5BDB",
+                        border: "1px solid rgba(59, 91, 219, 0.25)",
+                    }}
+                />
+            )}
+        </Box>
+    );
+};
+
+// ---------------------------------------------------------------------------
+// Filter chip bar
+// ---------------------------------------------------------------------------
+const EventFilterBar: React.FC<{
+    activeFilter: EventFilter;
+    onChange: (f: EventFilter) => void;
+}> = ({ activeFilter, onChange }) => (
+    <Stack direction="row" spacing={0.75} sx={{ flexWrap: "wrap", rowGap: 0.75, mb: 2 }}>
+        {EVENT_FILTERS.map((f) => {
+            const isActive = activeFilter === f;
+            return (
+                <Chip
+                    key={f}
+                    label={f}
+                    size="small"
+                    onClick={() => onChange(f)}
+                    sx={{
+                        fontWeight: isActive ? 700 : 500,
+                        fontSize: "12px",
+                        height: 28,
+                        px: 0.5,
+                        cursor: "pointer",
+                        bgcolor: isActive ? "#3B5BDB" : "rgba(0,0,0,0.04)",
+                        color: isActive ? "#fff" : "#555",
+                        border: isActive ? "none" : "1px solid rgba(0,0,0,0.08)",
+                        transition: "all 0.2s ease",
+                        "&:hover": {
+                            bgcolor: isActive ? "#2f4fc0" : "rgba(59, 91, 219, 0.08)",
+                            color: isActive ? "#fff" : "#3B5BDB",
+                        },
+                    }}
+                />
+            );
+        })}
+    </Stack>
+);
+
+// ---------------------------------------------------------------------------
+// Key Info Dropdown Select
+// ---------------------------------------------------------------------------
+const KEY_INFO_TYPES = ["10-K", "10-Q", "8-K"];
+
+const KeyInfoDropdown: React.FC<{ docs: IKeyInfoDocument[] }> = ({ docs }) => {
+    const [selectedType, setSelectedType] = useState<string>("");
+
+    const handleChange = (value: string) => {
+        setSelectedType(value);
+        const doc = docs.find((d) => d.type === value);
+        if (doc) {
+            window.open(doc.url, "_blank", "noopener,noreferrer");
+        }
+    };
+
+    return (
+        <FormControl size="small" sx={{ minWidth: 100 }}>
+            <Select
+                value={selectedType}
+                displayEmpty
+                onChange={(e) => handleChange(e.target.value)}
+                sx={{
+                    fontSize: "12px",
+                    height: 30,
+                    borderRadius: 1,
+                    "& .MuiSelect-select": {
+                        py: 0.5,
+                        display: "flex",
+                        alignItems: "center",
+                    },
+                }}
+                renderValue={(value) => {
+                    if (!value) {
+                        return (
+                            <Box display="flex" alignItems="center" gap={0.5}>
+                                <DescriptionOutlinedIcon sx={{ fontSize: 14, color: "#888" }} />
+                                <Typography variant="caption" color="text.secondary">
+                                    Key Info
+                                </Typography>
+                            </Box>
+                        );
+                    }
+                    return value;
+                }}
+            >
+                {KEY_INFO_TYPES.map((type) => {
+                    const doc = docs.find((d) => d.type === type);
+                    const colorMap: Record<string, string> = {
+                        "10-K": "#1565c0",
+                        "10-Q": "#2e7d32",
+                        "8-K": "#e65100",
+                    };
+                    return (
+                        <MenuItem
+                            key={type}
+                            value={type}
+                            disabled={!doc}
+                            sx={{ fontSize: "13px", py: 1 }}
+                        >
+                            <Box display="flex" alignItems="center" gap={1}>
+                                <DescriptionOutlinedIcon
+                                    sx={{
+                                        fontSize: 16,
+                                        color: doc ? colorMap[type] : "#ccc",
+                                    }}
+                                />
+                                <Typography fontSize="13px" color={doc ? "inherit" : "text.disabled"}>
+                                    {type}
+                                </Typography>
+                                {doc?.date && (
+                                    <Typography variant="caption" color="text.secondary" ml={1}>
+                                        ({doc.date})
+                                    </Typography>
+                                )}
+                            </Box>
+                        </MenuItem>
+                    );
+                })}
+            </Select>
+        </FormControl>
+    );
+};
+
+// ---------------------------------------------------------------------------
+// All Companies View
+// ---------------------------------------------------------------------------
+interface AllCompaniesViewProps {
+    selectedType: IWatchListType;
+}
+
+const AllCompaniesView: React.FC<AllCompaniesViewProps> = ({ selectedType }) => {
+    const { getAllItemsForType, watchlists } = useContext(WatchlistContext);
+    const [eventFilter, setEventFilter] = useState<EventFilter>("All");
+
+    const allItems = useMemo(() => getAllItemsForType(selectedType), [
+        getAllItemsForType,
+        selectedType,
+    ]);
+
+    // de-duplicate by ticker for the "All Companies" view
+    const uniqueItems = useMemo(() => {
+        const seen = new Set<string>();
+        return allItems.filter((item) => {
+            const key = item.ticker.toUpperCase();
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+    }, [allItems]);
+
+    const filteredItems = useMemo(
+        () => uniqueItems.filter((item) => passesEventFilter(item, eventFilter)),
+        [uniqueItems, eventFilter]
+    );
+
+    const getWatchlistName = (watchlistId: string) => {
+        return watchlists.find((w) => w.id === watchlistId)?.name ?? "—";
+    };
+
+    const typeLabel = selectedType === "user" ? "User" : "Team";
+
+    return (
+        <Box sx={{ height: "100%", display: "flex", flexDirection: "column", p: 3 }}>
+            {/* Header */}
+            <Box display="flex" alignItems="center" gap={1} mb={0.5}>
+                <Typography variant="h5" fontWeight="bold">
+                    All Companies
+                </Typography>
+                <Chip
+                    icon={
+                        selectedType === "user" ? (
+                            <PersonOutlineIcon sx={{ fontSize: 14 }} />
+                        ) : (
+                            <GroupIcon sx={{ fontSize: 14 }} />
+                        )
+                    }
+                    label={typeLabel}
+                    size="small"
+                    variant="outlined"
+                    sx={{ ml: 1, height: 24 }}
+                />
+            </Box>
+            <Typography variant="body2" color="text.secondary" mb={1.5}>
+                View all companies across all {typeLabel.toLowerCase()} watchlists
+            </Typography>
+
+            {/* Filter bar */}
+            <EventFilterBar activeFilter={eventFilter} onChange={setEventFilter} />
+
+            <Typography variant="subtitle2" color="text.secondary" mb={1}>
+                Watchlist Details&nbsp;&nbsp;
+                <Typography component="span" fontWeight={600} color="text.primary">
+                    {filteredItems.length} companies
+                </Typography>
+            </Typography>
+
+            {/* Table */}
+            <TableContainer
+                component={Paper}
+                sx={{
+                    flex: 1,
+                    boxShadow: "0 2px 12px rgba(0,0,0,0.06)",
+                    borderRadius: 2.5,
+                    overflow: "auto",
+                    border: "1px solid rgba(0,0,0,0.06)",
+                }}
+            >
+                <Table stickyHeader size="small">
+                    <TableHead>
+                        <TableRow>
+                            <TableCell sx={TABLE_HEADER_CELL_SX}>Company Name</TableCell>
+                            <TableCell sx={TABLE_HEADER_CELL_SX}>Ticker</TableCell>
+                            <TableCell sx={TABLE_HEADER_CELL_SX}>Watchlist</TableCell>
+                            <TableCell sx={TABLE_HEADER_CELL_SX}>Next Earnings</TableCell>
+                            <TableCell sx={TABLE_HEADER_CELL_SX}>Previous Earnings</TableCell>
+                        </TableRow>
+                    </TableHead>
+                    <TableBody>
+                        {filteredItems.length === 0 ? (
+                            <TableRow>
+                                <TableCell colSpan={5} align="center" sx={{ py: 8 }}>
+                                    <Typography color="text.secondary">
+                                        {eventFilter !== "All"
+                                            ? `No companies with earnings in "${eventFilter}" filter.`
+                                            : `No companies in any ${typeLabel.toLowerCase()} watchlist yet.`}
+                                    </Typography>
+                                </TableCell>
+                            </TableRow>
+                        ) : (
+                            filteredItems.map((item, idx) => (
+                                <TableRow
+                                    key={item.id}
+                                    sx={{
+                                        transition: "background-color 0.15s ease",
+                                        "&:hover": { bgcolor: "rgba(59, 91, 219, 0.04)" },
+                                        bgcolor: idx % 2 === 1 ? "rgba(0,0,0,0.015)" : "white",
+                                    }}
+                                >
+                                    <TableCell sx={{ py: 1.5, fontSize: "13px" }}>
+                                        {item.companyName}
+                                    </TableCell>
+                                    <TableCell
+                                        sx={{ py: 1.5, fontSize: "13px", fontWeight: 700 }}
+                                    >
+                                        {item.ticker}
+                                    </TableCell>
+                                    <TableCell sx={{ py: 1.5, fontSize: "13px", color: "#666" }}>
+                                        {getWatchlistName(item.watchlistId)}
+                                    </TableCell>
+                                    <TableCell sx={{ py: 1.5 }}>
+                                        <EarningsCell date={item.nextEarnings} isNext />
+                                    </TableCell>
+                                    <TableCell sx={{ py: 1.5 }}>
+                                        <EarningsCell date={item.previousEarnings} />
+                                    </TableCell>
+                                </TableRow>
+                            ))
+                        )}
+                    </TableBody>
+                </Table>
+            </TableContainer>
+        </Box>
+    );
+};
+
+// ---------------------------------------------------------------------------
+// Watchlist Detail (single watchlist view)
+// ---------------------------------------------------------------------------
+
+interface WatchlistDetailProps {
+    watchlistId: string | null;
+    selectedType: IWatchListType;
+}
+
+const WatchlistDetail: React.FC<WatchlistDetailProps> = ({
+    watchlistId,
+    selectedType,
+}) => {
+    const {
+        watchlists,
+        getWatchlistItems,
+        addItem,
+        removeItem,
+        reorderItems,
+        toggleFavorite,
+        isLoading,
+        events,
+    } = useContext(WatchlistContext);
+
+    const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+    const [dragIndex, setDragIndex] = useState<number | null>(null);
+    const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+    const [eventFilter, setEventFilter] = useState<EventFilter>("All");
+
+    // Check if "All Companies" is selected
+    const isAllCompanies = watchlistId?.startsWith("__all_companies_") ?? false;
+
+    const items = useMemo(() => {
+        if (!watchlistId || isAllCompanies) return [];
+        return getWatchlistItems(watchlistId);
+    }, [watchlistId, isAllCompanies, getWatchlistItems]);
+
+    const filteredItems = useMemo(
+        () => items.filter((item) => passesEventFilter(item, eventFilter)),
+        [items, eventFilter]
+    );
+
+    const watchlist = watchlists.find((w) => w.id === watchlistId);
+
+    // ---- Add stock handler ----
+    const handleAddStock = useCallback(
+        async (ticker: string, companyName: string) => {
+            if (!watchlistId) return;
+            await addItem({
+                watchlistId,
+                ticker,
+                companyName,
+                type: selectedType,
+                keyInfoDocuments: [
+                    {
+                        type: "10-K",
+                        label: `10-K`,
+                        url: `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${ticker}&type=10-K`,
+                    },
+                    {
+                        type: "10-Q",
+                        label: `10-Q`,
+                        url: `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${ticker}&type=10-Q`,
+                    },
+                    {
+                        type: "8-K",
+                        label: `8-K`,
+                        url: `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${ticker}&type=8-K`,
+                    },
+                ],
+            });
+        },
+        [watchlistId, addItem, selectedType]
+    );
+
+    // ---- Remove handler ----
+    const handleRemove = useCallback(
+        async (itemId: string) => {
+            await removeItem(itemId);
+        },
+        [removeItem]
+    );
+
+    // ---- Export next-week events to CSV (Outlook template) ----
+    const handleExportOutlook = useCallback(() => {
+        const now = new Date();
+        const oneWeek = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+        const watchlistTickers = new Set(items.map((i) => i.ticker.toUpperCase()));
+
+        // Get next-week events for this watchlist's tickers
+        const nextWeekEvents = events
+            .filter((e) => {
+                const d = new Date(e.event_date);
+                return (
+                    watchlistTickers.has(e.ticker.toUpperCase()) &&
+                    d >= now &&
+                    d <= oneWeek
+                );
+            })
+            .sort((a, b) => new Date(a.event_date).getTime() - new Date(b.event_date).getTime());
+
+        // Also include items with nextEarnings in the next week
+        const itemsNextWeek = items.filter((item) => {
+            if (!item.nextEarnings) return false;
+            const d = new Date(item.nextEarnings);
+            return d >= now && d <= oneWeek;
+        });
+
+        // Build CSV rows
+        const csvRows = [
+            ["Ticker", "Company Name", "Event", "Date"].join(","),
+        ];
+
+        // Add events from the events API
+        nextWeekEvents.forEach((e) => {
+            csvRows.push(
+                [e.ticker, `"${e.company_name}"`, `"${e.event_name}"`, e.event_date].join(",")
+            );
+        });
+
+        // Add items with nextEarnings that aren't already in events
+        const eventTickers = new Set(nextWeekEvents.map((e) => e.ticker.toUpperCase()));
+        itemsNextWeek
+            .filter((item) => !eventTickers.has(item.ticker.toUpperCase()))
+            .forEach((item) => {
+                csvRows.push(
+                    [item.ticker, `"${item.companyName}"`, "Earnings", item.nextEarnings || ""].join(",")
+                );
+            });
+
+        if (csvRows.length <= 1) {
+            alert("No events scheduled for the next week for this watchlist.");
+            return;
+        }
+
+        // Download CSV
+        const blob = new Blob([csvRows.join("\n")], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `watchlist_next_week_${watchlist?.name?.replace(/\s+/g, "_") || "export"}.csv`;
+        link.click();
+        URL.revokeObjectURL(url);
+    }, [items, events, watchlist]);
+
+    // ---- Drag and Drop ----
+    const onDragStart = (
+        e: React.DragEvent<HTMLTableRowElement>,
+        index: number
+    ) => {
+        setDragIndex(index);
+        e.dataTransfer.effectAllowed = "move";
+        if (e.currentTarget) {
+            e.currentTarget.style.opacity = "0.4";
+        }
+    };
+
+    const onDragEnter = (
+        _e: React.DragEvent<HTMLTableRowElement>,
+        index: number
+    ) => {
+        setDragOverIndex(index);
+    };
+
+    const onDragEnd = (e: React.DragEvent<HTMLTableRowElement>) => {
+        if (e.currentTarget) {
+            e.currentTarget.style.opacity = "1";
+        }
+
+        if (
+            dragIndex !== null &&
+            dragOverIndex !== null &&
+            dragIndex !== dragOverIndex &&
+            watchlistId
+        ) {
+            const reordered = [...filteredItems];
+            const [dragged] = reordered.splice(dragIndex, 1);
+            reordered.splice(dragOverIndex, 0, dragged);
+            reorderItems(
+                watchlistId,
+                reordered.map((i) => i.id)
+            );
+        }
+
+        setDragIndex(null);
+        setDragOverIndex(null);
+    };
+
+    const onDragOver = (e: React.DragEvent<HTMLTableRowElement>) => {
+        e.preventDefault();
+    };
+
+    // ---- Route: All Companies ----
+    if (isAllCompanies) {
+        return <AllCompaniesView selectedType={selectedType} />;
+    }
+
+    // ---- Empty state ----
+    if (!watchlistId || !watchlist) {
+        return (
+            <Box
+                display="flex"
+                justifyContent="center"
+                alignItems="center"
+                height="100%"
+                color="text.secondary"
+            >
+                <Typography variant="h6">Select a watchlist to view details</Typography>
+            </Box>
+        );
+    }
+
+    return (
+        <Box sx={{ height: "100%", display: "flex", flexDirection: "column", p: 3 }}>
+            {/* Header */}
+            <Box
+                display="flex"
+                justifyContent="space-between"
+                alignItems="flex-start"
+                mb={1}
+            >
+                <Box>
+                    <Box display="flex" alignItems="center" gap={1} mb={0.5}>
+                        <Typography variant="h5" fontWeight="bold">
+                            {watchlist.name}
+                        </Typography>
+                        <IconButton
+                            size="small"
+                            onClick={() => toggleFavorite(watchlist.id)}
+                            sx={{ color: watchlist.favorite ? "#3B5BDB" : "#bdbdbd" }}
+                        >
+                            {watchlist.favorite ? (
+                                <StarIcon fontSize="small" />
+                            ) : (
+                                <StarBorderIcon fontSize="small" />
+                            )}
+                        </IconButton>
+                        <Chip
+                            icon={
+                                watchlist.type === "user" ? (
+                                    <PersonOutlineIcon fontSize="small" />
+                                ) : (
+                                    <GroupIcon fontSize="small" />
+                                )
+                            }
+                            label={watchlist.type === "user" ? "User" : "Team"}
+                            size="small"
+                            variant="outlined"
+                            sx={{ ml: 1 }}
+                        />
+                        <Chip
+                            label={`${items.length} stock${items.length !== 1 ? "s" : ""}`}
+                            size="small"
+                            sx={{ ml: 1, bgcolor: "#f0f0f0" }}
+                        />
+                    </Box>
+                    <Typography variant="body2" color="text.secondary">
+                        {watchlist.description}
+                    </Typography>
+                </Box>
+                <Stack direction="row" spacing={1}>
+                    <Button
+                        variant="outlined"
+                        startIcon={<FileDownloadOutlinedIcon />}
+                        onClick={handleExportOutlook}
+                        disabled={isLoading}
+                        sx={{
+                            textTransform: "none",
+                            borderRadius: 2,
+                            fontWeight: 600,
+                            px: 2,
+                            borderColor: "#3B5BDB",
+                            color: "#3B5BDB",
+                            "&:hover": { bgcolor: "rgba(59, 91, 219, 0.06)" },
+                        }}
+                    >
+                        Export Next Week
+                    </Button>
+                    <Button
+                        variant="contained"
+                        startIcon={isLoading ? <CircularProgress size={16} color="inherit" /> : <AddIcon />}
+                        onClick={() => setIsAddModalOpen(true)}
+                        disabled={isLoading}
+                        sx={{
+                            textTransform: "none",
+                            borderRadius: 2,
+                            background: TABLE_HEADER_BG,
+                            fontWeight: 600,
+                            px: 2.5,
+                            boxShadow: "0 2px 8px rgba(59, 91, 219, 0.25)",
+                            "&:hover": {
+                                background: "linear-gradient(135deg, #162d4d 0%, #2f4fc0 50%, #4a6be0 100%)",
+                            },
+                        }}
+                    >
+                        Add Stock
+                    </Button>
+                </Stack>
+            </Box>
+
+            {/* Filter bar — below description */}
+            <EventFilterBar activeFilter={eventFilter} onChange={setEventFilter} />
+
+            <Divider sx={{ mb: 2 }} />
+
+            {/* Drag instruction */}
+            {filteredItems.length > 1 && (
+                <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ mb: 1, display: "block" }}
+                >
+                    💡 Drag rows to reorder priority. #1 = highest priority.
+                </Typography>
+            )}
+
+            {/* Table */}
+            <TableContainer
+                component={Paper}
+                sx={{
+                    flex: 1,
+                    width: "100%",
+                    boxShadow: "0 2px 12px rgba(0,0,0,0.06)",
+                    borderRadius: 2.5,
+                    overflow: "auto",
+                    border: "1px solid rgba(0,0,0,0.06)",
+                }}
+            >
+                <Table stickyHeader size="small">
+                    <TableHead>
+                        <TableRow>
+                            <TableCell width={40} sx={TABLE_HEADER_CELL_SX}></TableCell>
+                            <TableCell width={60} sx={TABLE_HEADER_CELL_SX}>
+                                Priority
+                            </TableCell>
+                            <TableCell sx={TABLE_HEADER_CELL_SX}>Ticker</TableCell>
+                            <TableCell sx={TABLE_HEADER_CELL_SX}>Company Name</TableCell>
+                            <TableCell sx={TABLE_HEADER_CELL_SX}>Next Earnings</TableCell>
+                            <TableCell sx={TABLE_HEADER_CELL_SX}>Previous Earnings</TableCell>
+                            <TableCell sx={{ ...TABLE_HEADER_CELL_SX, minWidth: 120 }}>
+                                Key Info
+                            </TableCell>
+                            <TableCell width={50} sx={TABLE_HEADER_CELL_SX}></TableCell>
+                        </TableRow>
+                    </TableHead>
+                    <TableBody>
+                        {filteredItems.length === 0 ? (
+                            <TableRow>
+                                <TableCell colSpan={8} align="center" sx={{ py: 8 }}>
+                                    <Box>
+                                        <Typography
+                                            variant="body1"
+                                            color="text.secondary"
+                                            gutterBottom
+                                        >
+                                            {eventFilter !== "All"
+                                                ? `No stocks with earnings in "${eventFilter}" filter.`
+                                                : "No stocks in this watchlist yet."}
+                                        </Typography>
+                                        {eventFilter === "All" && (
+                                            <Button
+                                                variant="outlined"
+                                                size="small"
+                                                startIcon={<AddIcon />}
+                                                onClick={() => setIsAddModalOpen(true)}
+                                                sx={{ textTransform: "none", mt: 1 }}
+                                            >
+                                                Add your first stock
+                                            </Button>
+                                        )}
+                                    </Box>
+                                </TableCell>
+                            </TableRow>
+                        ) : (
+                            filteredItems.map((item, index) => {
+                                const isDropTarget =
+                                    dragOverIndex === index && dragIndex !== index;
+
+                                return (
+                                    <TableRow
+                                        key={item.id}
+                                        draggable
+                                        onDragStart={(e) => onDragStart(e, index)}
+                                        onDragEnter={(e) => onDragEnter(e, index)}
+                                        onDragEnd={onDragEnd}
+                                        onDragOver={onDragOver}
+                                        sx={{
+                                            cursor: "grab",
+                                            "&:hover": {
+                                                backgroundColor: "rgba(59, 91, 219, 0.04)",
+                                            },
+                                            backgroundColor: isDropTarget
+                                                ? "rgba(59, 91, 219, 0.08)"
+                                                : index % 2 === 1
+                                                    ? "rgba(0,0,0,0.015)"
+                                                    : "white",
+                                            borderTop: isDropTarget
+                                                ? "2px solid #3B5BDB"
+                                                : "none",
+                                            transition:
+                                                "background-color 0.15s ease, border 0.15s ease",
+                                            "&:active": { cursor: "grabbing" },
+                                        }}
+                                    >
+                                        <TableCell sx={{ py: 1.5 }}>
+                                            <IconButton
+                                                size="small"
+                                                disableRipple
+                                                sx={{
+                                                    cursor: "grab",
+                                                    "&:active": { cursor: "grabbing" },
+                                                }}
+                                            >
+                                                <DragIndicatorIcon
+                                                    fontSize="small"
+                                                    color="disabled"
+                                                />
+                                            </IconButton>
+                                        </TableCell>
+                                        <TableCell sx={{ py: 1.5 }}>
+                                            <Chip
+                                                label={`#${item.rank}`}
+                                                size="small"
+                                                sx={{
+                                                    fontWeight: 700,
+                                                    fontSize: "12px",
+                                                    bgcolor:
+                                                        item.rank <= 3
+                                                            ? "rgba(59, 91, 219, 0.1)"
+                                                            : "#f5f5f5",
+                                                    color:
+                                                        item.rank <= 3
+                                                            ? "#3B5BDB"
+                                                            : "#666",
+                                                    minWidth: 36,
+                                                }}
+                                            />
+                                        </TableCell>
+                                        <TableCell sx={{ py: 1.5 }}>
+                                            <Typography fontWeight="bold" fontSize="14px">
+                                                {item.ticker}
+                                            </Typography>
+                                        </TableCell>
+                                        <TableCell sx={{ py: 1.5 }}>
+                                            <Typography fontSize="13px" color="text.secondary">
+                                                {item.companyName}
+                                            </Typography>
+                                        </TableCell>
+                                        <TableCell sx={{ py: 1.5 }}>
+                                            <EarningsCell date={item.nextEarnings} isNext />
+                                        </TableCell>
+                                        <TableCell sx={{ py: 1.5 }}>
+                                            <EarningsCell date={item.previousEarnings} />
+                                        </TableCell>
+                                        <TableCell sx={{ py: 1.5 }}>
+                                            {item.keyInfoDocuments &&
+                                                item.keyInfoDocuments.length > 0 ? (
+                                                <KeyInfoDropdown
+                                                    docs={item.keyInfoDocuments}
+                                                />
+                                            ) : (
+                                                <Typography
+                                                    variant="caption"
+                                                    color="text.disabled"
+                                                >
+                                                    —
+                                                </Typography>
+                                            )}
+                                        </TableCell>
+                                        <TableCell sx={{ py: 1.5 }}>
+                                            <Tooltip title="Remove from watchlist">
+                                                <IconButton
+                                                    size="small"
+                                                    onClick={() => handleRemove(item.id)}
+                                                    sx={{
+                                                        color: "#bbb",
+                                                        "&:hover": {
+                                                            color: "#d32f2f",
+                                                            bgcolor: "#ffebee",
+                                                        },
+                                                    }}
+                                                >
+                                                    <CloseIcon fontSize="small" />
+                                                </IconButton>
+                                            </Tooltip>
+                                        </TableCell>
+                                    </TableRow>
+                                );
+                            })
+                        )}
+                    </TableBody>
+                </Table>
+            </TableContainer>
+
+            <AddStockModal
+                open={isAddModalOpen}
+                onClose={() => setIsAddModalOpen(false)}
+                onAdd={handleAddStock}
+                existingTickers={items.map((i) => i.ticker)}
+            />
+        </Box>
+    );
+};
+
+export default WatchlistDetail;
