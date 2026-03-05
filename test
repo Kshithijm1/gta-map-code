@@ -84,8 +84,8 @@
 }
 
 .cellName {
-  flex: 1 1 0%;
-  min-width: 120px;
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -111,68 +111,44 @@
   flex-shrink: 0;
 }
 
-.cellDate {
-  width: 120px;
-  min-width: 120px;
-  max-width: 120px;
-  font-size: 13px;
-  color: #757575;
-  white-space: nowrap;
+.cellSharing {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   overflow: hidden;
-  text-overflow: ellipsis;
-  padding-right: 14px;
-  flex-shrink: 0;
-}
-
-.cellOwner {
-  width: 110px;
-  min-width: 110px;
-  max-width: 110px;
-  font-size: 13px;
-  color: #757575;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  padding-right: 14px;
-  flex-shrink: 0;
 }
 
 .cellSize {
-  width: 70px;
-  min-width: 70px;
-  max-width: 70px;
+  flex: 1;
+  min-width: 0;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  flex-shrink: 0;
 }
 
 .cellType {
-  width: 80px;
-  min-width: 80px;
-  max-width: 80px;
+  flex: 1;
+  min-width: 0;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  flex-shrink: 0;
 }
 
 .cellTags {
-  width: 130px;
-  min-width: 130px;
-  max-width: 130px;
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: nowrap;
   overflow-x: auto;
   overflow-y: hidden;
-  padding-right: 14px;
-  flex-shrink: 0;
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
@@ -195,14 +171,24 @@
   transition: all 0.2s ease;
 }
 
-.cellSharing {
-  width: 50px;
-  min-width: 50px;
-  max-width: 50px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
+.cellDate {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: #757575;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cellOwner {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: #757575;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .cellDelete {
