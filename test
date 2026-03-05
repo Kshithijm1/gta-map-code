@@ -7,8 +7,7 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-  overflow-x: auto;
-  overflow-y: hidden;
+  overflow: hidden;
 }
 
 /* ---- Header Row ---- */
@@ -26,13 +25,15 @@
   position: sticky;
   top: 0;
   z-index: 2;
-  min-width: 0;
+  /* Reserve space for body scrollbar so columns align */
+  padding-right: calc(12px + 17px);
 }
 
 /* ---- Table Body ---- */
 .tableBody {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
 }
 
 /* ---- Table Row ---- */
@@ -45,7 +46,6 @@
   transition: background-color 0.15s ease;
   min-height: 44px;
   user-select: none;
-  min-width: 0;
 }
 
 .tableRow:hover {
@@ -76,14 +76,14 @@
   justify-content: center;
 }
 
-/* Flexible data columns — all use flex to share space proportionally */
+/* Flexible data columns — proportional sizing */
 .cellName {
-  flex: 3 1 0;
-  min-width: 120px;
+  flex: 2.5 1 0%;
+  min-width: 100px;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding-right: 8px;
+  padding-right: 12px;
   overflow: hidden;
 }
 
@@ -110,37 +110,37 @@
 }
 
 .cellSize {
-  flex: 1 1 0;
-  min-width: 60px;
-  font-size: 13px;
-  color: #757575;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  padding-right: 8px;
-}
-
-.cellType {
-  flex: 1 1 0;
+  flex: 1 1 0%;
   min-width: 50px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  padding-right: 8px;
+  padding-right: 12px;
+}
+
+.cellType {
+  flex: 1 1 0%;
+  min-width: 50px;
+  font-size: 13px;
+  color: #757575;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-right: 12px;
 }
 
 .cellTags {
-  flex: 1.5 1 0;
-  min-width: 70px;
+  flex: 1.2 1 0%;
+  min-width: 60px;
   display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: nowrap;
   overflow-x: auto;
   overflow-y: hidden;
-  padding-right: 8px;
+  padding-right: 12px;
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
@@ -164,25 +164,25 @@
 }
 
 .cellDate {
-  flex: 1.2 1 0;
-  min-width: 80px;
+  flex: 1.2 1 0%;
+  min-width: 70px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  padding-right: 8px;
+  padding-right: 12px;
 }
 
 .cellOwner {
-  flex: 1 1 0;
-  min-width: 60px;
+  flex: 1 1 0%;
+  min-width: 50px;
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  padding-right: 8px;
+  padding-right: 12px;
 }
 
 .cellDelete {
