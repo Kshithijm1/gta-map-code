@@ -1,44 +1,40 @@
 /* ============================================
    Row-Based Folder Structure Table Styles
-   Using display:table for guaranteed alignment
+   Single table layout for guaranteed alignment
    ============================================ */
 
-/* Container */
-.tableContainer {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  overflow-x: auto;
-  overflow-y: auto;
+/* Scroll wrapper */
+.tableScroll {
+  flex: 1;
+  overflow: auto;
 }
 
-/* ---- Table wrapper ---- */
-.headerRow {
+/* The actual table — headerRow + tableBody are inside this */
+.tableContainer {
   display: table;
   table-layout: fixed;
   width: 100%;
-  border-bottom: 2px solid #e0e0e0;
+  border-collapse: collapse;
+}
+
+/* ---- Header Row ---- */
+.headerRow {
+  display: table-row;
   background-color: #fafafa;
   font-weight: 600;
   font-size: 13px;
   color: #616161;
   user-select: none;
-  position: sticky;
-  top: 0;
-  z-index: 2;
 }
 
 /* ---- Table Body ---- */
 .tableBody {
-  flex: 1;
+  display: table-row-group;
 }
 
 /* ---- Table Row ---- */
 .tableRow {
-  display: table;
-  table-layout: fixed;
-  width: 100%;
-  border-bottom: 1px solid #f0f0f0;
+  display: table-row;
   cursor: pointer;
   transition: background-color 0.15s ease;
   user-select: none;
@@ -57,7 +53,7 @@
 }
 
 /* ============================================
-   Column Cells — all table-cell with fixed widths
+   Column Cells — all table-cell
    ============================================ */
 
 .cellCheckbox {
@@ -65,7 +61,7 @@
   width: 36px;
   vertical-align: middle;
   text-align: center;
-  padding: 6px 0;
+  padding: 6px 2px;
 }
 
 .cellIcon {
@@ -73,17 +69,18 @@
   width: 32px;
   vertical-align: middle;
   text-align: center;
-  padding: 6px 0;
+  padding: 6px 2px;
 }
 
 .cellName {
   display: table-cell;
-  width: 220px;
   vertical-align: middle;
   padding: 6px 8px 6px 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  max-width: 0;
+  /* forces truncation in table-cell */
 }
 
 .nameText {
@@ -92,6 +89,7 @@
   white-space: nowrap;
   font-size: 14px;
   color: #212121;
+  display: block;
 }
 
 .cellSharing {
@@ -99,7 +97,7 @@
   width: 50px;
   vertical-align: middle;
   text-align: center;
-  padding: 6px 0;
+  padding: 6px 2px;
 }
 
 .cellFavorite {
@@ -107,7 +105,7 @@
   width: 36px;
   vertical-align: middle;
   text-align: center;
-  padding: 6px 0;
+  padding: 6px 2px;
 }
 
 .cellSize {
@@ -117,8 +115,6 @@
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   padding: 6px 4px;
 }
 
@@ -129,24 +125,16 @@
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   padding: 6px 4px;
 }
 
-/* Tags — scrollable horizontally */
 .cellTags {
   display: table-cell;
   width: 150px;
   vertical-align: middle;
   padding: 6px 4px;
-  overflow: hidden;
-}
-
-.cellTags>div,
-.cellTags>span {
-  display: inline-block;
   white-space: nowrap;
+  overflow: hidden;
 }
 
 .tag {
@@ -164,7 +152,6 @@
   margin-right: 4px;
 }
 
-/* Date Created — scrollable */
 .cellDate {
   display: table-cell;
   width: 160px;
@@ -172,8 +159,6 @@
   font-size: 13px;
   color: #757575;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   padding: 6px 4px;
 }
 
@@ -196,7 +181,7 @@
   text-align: center;
   color: #757575;
   cursor: pointer;
-  padding: 6px 0;
+  padding: 6px 2px;
 }
 
 .cellDelete:hover {
@@ -280,8 +265,9 @@
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: #9e9e9e;
-  padding-top: 8px;
-  padding-bottom: 8px;
+  padding-top: 10px !important;
+  padding-bottom: 10px !important;
+  border-bottom: 2px solid #e0e0e0;
 }
 
 /* Empty state */
