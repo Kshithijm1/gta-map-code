@@ -6,21 +6,13 @@ import { SECRET_PROJECT_ID, SECRET_WATCHLIST_DATASET } from "@/lib/env";
 const DATASET = SECRET_WATCHLIST_DATASET || "cbldt-b016-int-2e05.raw_ext_sgam_1832_aiq_interactive_ist";
 
 export async function POST(req: NextRequest) {
-    logger.info("Creating a new watchlist");
+    logger.info("Fetching watchlist items via table function");
     try {
-        const {
-            user_sid,
-            team_code,
-            access_group,
-            admin_group,
-            watchlist_name,
-            watchlist_description,
-            watchlist_access_level,
-        } = await req.json();
+        const { watchlist_id, user_sid, team_code } = await req.json();
 
-        if (!user_sid || !watchlist_name) {
+        if (!user_sid || (!watchlist_id && watchlist_id !== "")) {
             return NextResponse.json(
-                { error: "user_sid and watchlist_name are required" },
+                { error: "user_sid and watchlist_id are required" },
                 { status: 400 }
             );
         }
@@ -28,57 +20,46 @@ export async function POST(req: NextRequest) {
         const bigQueryClient = new BigQuery({ projectId: SECRET_PROJECT_ID });
 
         // BigQuery requires each part of the path to be individually backticked if they contain hyphens
-        const tablePath = DATASET.split('.').map(p => `\`${p}\``).join('.') + `.\`watchlists\``;
+        const tablePath = DATASET.split('.').map(p => `\`${p}\``).join('.') + `.\`tf_get_watchlists_items\``;
 
+        // Call the table function
         const query = `
-            INSERT INTO ${tablePath} (
-                user_sid,
-                admin_group,
-                team_code,
-                access_group,
-                watchlist_name,
-                watchlist_description,
-                watchlist_access_level,
-                is_active,
-                last_updated_user_sid,
-                _created_ts,
-                _updated_ts
-            ) VALUES (
-                @user_sid,
-                @admin_group,
-                @team_code,
-                @access_group,
-                @watchlist_name,
-                @watchlist_description,
-                @watchlist_access_level,
-                'Y',
-                @user_sid,
-                CURRENT_TIMESTAMP(),
-                CURRENT_TIMESTAMP()
-            )
+            SELECT *
+            FROM ${tablePath}(@watchlist_id, @user_sid, @team_code)
         `;
 
-        await bigQueryClient.query({
+        const [rows] = await bigQueryClient.query({
             query,
-            params: {
-                user_sid,
-                admin_group: admin_group || "",
-                team_code: team_code || "",
-                access_group: access_group || "",
-                watchlist_name,
-                watchlist_description: watchlist_description || "",
-                watchlist_access_level: watchlist_access_level || "user",
-            },
+            params: { watchlist_id, user_sid, team_code: team_code || "" },
         });
 
-        return NextResponse.json(
-            { success: true, message: "Watchlist created successfully" },
-            { status: 200 }
-        );
+        // Map rows to IWatchlistItem shape
+        const items = (rows || []).map((row: any) => ({
+            id: String(row.watchlist_item_id),
+            watchlist_item_id: row.watchlist_item_id,
+            companyName: row.company_name || "",
+            ticker: row.ticker || "",
+            rank: row.item_rank || 0,
+            watchlistId: String(row.watchlist_id),
+            type: row.watchlist_access_level === "team" ? "team" : "user",
+            ID_BB_COMPANY: row.ID_BB_COMPANY,
+            is_active: row.is_active,
+            last_updated_user_sid: row.last_updated_user_sid,
+            // Event data (if the table function returns these)
+            nextEarnings: row.next_event_date || row.nextEarnings || undefined,
+            previousEarnings: row.prev_event_date || row.previousEarnings || undefined,
+            next_event_name: row.next_event_name,
+            next_event_date: row.next_event_date,
+            next_event_time: row.next_event_time,
+            prev_event_name: row.prev_event_name,
+            prev_event_date: row.prev_event_date,
+        }));
+
+        return NextResponse.json({ items }, { status: 200 });
     } catch (error: any) {
-        logger.error("Error creating watchlist", error);
+        logger.error("Error fetching watchlist items", error);
         return NextResponse.json(
-            { error: error.message || "Failed to create watchlist" },
+            { error: error.message || "Failed to fetch watchlist items" },
             { status: 500 }
         );
     }
