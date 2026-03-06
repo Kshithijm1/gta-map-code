@@ -6,13 +6,13 @@ import { SECRET_PROJECT_ID, SECRET_WATCHLIST_DATASET } from "@/lib/env";
 const DATASET = SECRET_WATCHLIST_DATASET || "cbldt-b016-int-2e05.raw_ext_sgam_1832_aiq_interactive_ist";
 
 export async function POST(req: NextRequest) {
-    logger.info("Fetching watchlist items via table function");
+    logger.info("Fetching watchlist events via table function");
     try {
-        const { watchlist_id, user_sid, team_code } = await req.json();
+        const { user_sid, team_code } = await req.json();
 
-        if (!user_sid || (!watchlist_id && watchlist_id !== "")) {
+        if (!user_sid) {
             return NextResponse.json(
-                { error: "user_sid and watchlist_id are required" },
+                { error: "user_sid is required" },
                 { status: 400 }
             );
         }
@@ -20,46 +20,34 @@ export async function POST(req: NextRequest) {
         const bigQueryClient = new BigQuery({ projectId: SECRET_PROJECT_ID });
 
         // BigQuery requires each part of the path to be individually backticked if they contain hyphens
-        const tablePath = DATASET.split('.').map(p => `\`${p}\``).join('.') + `.\`tf_get_watchlists_items\``;
+        const tablePath = DATASET.split('.').map(p => `\`${p}\``).join('.') + `.\`tf_get_watchlists_events\``;
 
-        // Call the table function
+        // Call the table function for events (S&P events data feed)
         const query = `
             SELECT *
-            FROM ${tablePath}(@watchlist_id, @user_sid, @team_code)
+            FROM ${tablePath}(@user_sid, @team_code)
         `;
 
         const [rows] = await bigQueryClient.query({
             query,
-            params: { watchlist_id, user_sid, team_code: team_code || "" },
+            params: { user_sid, team_code: team_code || "" },
         });
 
-        // Map rows to IWatchlistItem shape
-        const items = (rows || []).map((row: any) => ({
-            id: String(row.watchlist_item_id),
-            watchlist_item_id: row.watchlist_item_id,
-            companyName: row.company_name || "",
+        // Map rows to IWatchlistEvent shape
+        const events = (rows || []).map((row: any) => ({
             ticker: row.ticker || "",
-            rank: row.item_rank || 0,
-            watchlistId: String(row.watchlist_id),
-            type: row.watchlist_access_level === "team" ? "team" : "user",
-            ID_BB_COMPANY: row.ID_BB_COMPANY,
-            is_active: row.is_active,
-            last_updated_user_sid: row.last_updated_user_sid,
-            // Event data (if the table function returns these)
-            nextEarnings: row.next_event_date || row.nextEarnings || undefined,
-            previousEarnings: row.prev_event_date || row.previousEarnings || undefined,
-            next_event_name: row.next_event_name,
-            next_event_date: row.next_event_date,
-            next_event_time: row.next_event_time,
-            prev_event_name: row.prev_event_name,
-            prev_event_date: row.prev_event_date,
+            company_name: row.company_name || "",
+            event_name: row.event_name || "",
+            event_date: row.event_date || "",
+            event_time: row.event_time || undefined,
+            event_type: row.event_type || undefined,
         }));
 
-        return NextResponse.json({ items }, { status: 200 });
+        return NextResponse.json({ events }, { status: 200 });
     } catch (error: any) {
-        logger.error("Error fetching watchlist items", error);
+        logger.error("Error fetching watchlist events", error);
         return NextResponse.json(
-            { error: error.message || "Failed to fetch watchlist items" },
+            { error: error.message || "Failed to fetch watchlist events" },
             { status: 500 }
         );
     }
