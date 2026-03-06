@@ -282,6 +282,50 @@
   cursor: inherit;
 }
 
+/* ---- Header-specific column overrides ---- */
+/* Use these on the header row so labels can be spaced
+   independently from the data-row .cell* widths.        */
+.hdrName {
+  flex: 1;
+  min-width: 0;
+  padding-right: 40px;
+  cursor: pointer;
+}
+
+.hdrSharing {
+  flex: 1;
+  min-width: 0;
+}
+
+.hdrSize {
+  flex: 0.6;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.hdrType {
+  flex: 0.6;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.hdrTags {
+  flex: 1;
+  min-width: 0;
+}
+
+.hdrDate {
+  flex: 0.8;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.hdrOwner {
+  flex: 0.6;
+  min-width: 0;
+  cursor: pointer;
+}
+
 /* Empty state */
 .emptyState {
   display: flex;
@@ -291,3 +335,81 @@
   height: 200px;
   color: #9e9e9e;
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+            {/* Table */}
+            <Box className={styles.tableContainer} sx={{ mt: 1 }}>
+                {/* ── Header Row ── */}
+                <Box className={styles.headerRow}>
+                    {!isRootView && (
+                        <Box className={styles.cellCheckbox}>{'\u00A0'}</Box>
+                    )}
+                    <Box className={styles.cellIcon}>{'\u00A0'}</Box>
+                    <Box className={styles.hdrName} onClick={() => {
+                        if (sortColumn === 'name') { setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc'); }
+                        else { setSortColumn('name'); setSortDirection('asc'); }
+                    }}>
+                        Name {sortColumn === 'name' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}
+                    </Box>
+                    <Box className={styles.hdrSharing}>{'\u00A0'}</Box>
+                    {!isRootView && (
+                        <Box className={styles.cellFavorite}>
+                            <StarBorderIcon sx={{ fontSize: 16, color: "#9e9e9e" }} />
+                        </Box>
+                    )}
+                    <Box className={styles.hdrSize} onClick={() => {
+                        if (sortColumn === 'size') { setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc'); }
+                        else { setSortColumn('size'); setSortDirection('asc'); }
+                    }}>
+                        Size {sortColumn === 'size' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}
+                    </Box>
+                    {!isRootView && (
+                        <Box className={styles.hdrType} onClick={() => {
+                            if (sortColumn === 'type') { setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc'); }
+                            else { setSortColumn('type'); setSortDirection('asc'); }
+                        }}>
+                            Type {sortColumn === 'type' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}
+                        </Box>
+                    )}
+                    <Box className={styles.hdrTags}>
+                        Tags
+                    </Box>
+                    <Box className={styles.hdrDate} onClick={() => {
+                        if (sortColumn === 'date') { setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc'); }
+                        else { setSortColumn('date'); setSortDirection('asc'); }
+                    }}>
+                        Date {sortColumn === 'date' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}
+                    </Box>
+                    <Box className={styles.hdrOwner} onClick={() => {
+                        if (sortColumn === 'owner') { setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc'); }
+                        else { setSortColumn('owner'); setSortDirection('asc'); }
+                    }}>
+                        Owner {sortColumn === 'owner' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}
+                    </Box>
+                    <Box className={styles.cellDelete}>{'\u00A0'}</Box>
+                </Box>
