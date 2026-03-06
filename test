@@ -1,415 +1,145 @@
-/* ============================================
-   Row-Based Folder Structure Table Styles
-   ============================================ */
+import { NextRequest, NextResponse } from "next/server";
+import { Storage } from "@google-cloud/storage";
+import { SECRET_GCS_FILE_UPLOAD_BUCKET, SECRET_PROJECT_ID } from "@/lib/env";
+import logger from "@/lib/logger";
 
-/* Container */
-.tableContainer {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  overflow-x: auto;
-  overflow-y: hidden;
+/**
+ * POST /api/uploadDocuments/shareToTeam
+ * Copies files AND folders from personal to a team subfolder.
+ *
+ * Body: { sID, teamCode, files: string[], folders: string[], targetFolder }
+ *   - files: gs:// URIs or relative paths of single files
+ *   - folders: gs:// URIs or relative paths of folder prefixes (ending in /)
+ *   - targetFolder: full GCS path prefix of the target team subfolder
+ */
+
+/** Strip gs:// prefix and bucket name, returning a clean relative GCS path */
+const toRelative = (p: string): string => {
+    if (p.startsWith("gs://")) {
+        const parts = p.replace("gs://", "").split("/");
+        parts.shift(); // remove bucket name
+        return parts.join("/");
+    }
+    return p;
+};
+
+/** Collapse any double (or more) slashes into single slashes */
+const cleanPath = (p: string): string => p.replace(/\/\/+/g, "/");
+
+export async function POST(req: NextRequest) {
+    try {
+        const body = await req.json();
+        const { sID, teamCode, files = [], folders = [], targetFolder } = body;
+
+        if (!sID || !teamCode || !targetFolder) {
+            return NextResponse.json(
+                { success: false, message: "sID, teamCode, and targetFolder are required" },
+                { status: 400 }
+            );
+        }
+
+        logger.info(`[ShareToTeam] Request: sID="${sID}", teamCode="${teamCode}", files=${JSON.stringify(files)}, folders=${JSON.stringify(folders)}, targetFolder="${targetFolder}"`);
+
+        const storage = new Storage({ projectId: SECRET_PROJECT_ID });
+        const bucket = storage.bucket(SECRET_GCS_FILE_UPLOAD_BUCKET);
+
+        // Normalize target prefix — ensure single trailing slash, no double slashes
+        let targetPrefix = toRelative(targetFolder);
+        if (!targetPrefix.endsWith("/")) targetPrefix += "/";
+        targetPrefix = cleanPath(targetPrefix);
+
+        logger.info(`[ShareToTeam] Resolved targetPrefix="${targetPrefix}"`);
+
+        // Helper: copy a single file to the target prefix and tag with creatorSID
+        const copyFile = async (relativePath: string, destPath: string): Promise<boolean> => {
+            const cleanDest = cleanPath(destPath);
+            const cleanSrc = cleanPath(relativePath);
+            logger.info(`[ShareToTeam] Attempting copy: "${cleanSrc}" -> "${cleanDest}"`);
+            try {
+                await bucket.file(cleanSrc).copy(bucket.file(cleanDest));
+                try {
+                    await bucket.file(cleanDest).setMetadata({
+                        metadata: {
+                            creatorSID: String(sID)
+                        }
+                    });
+                } catch (metaErr: any) {
+                    logger.error(`[ShareToTeam] Metadata error on ${cleanDest}: ${metaErr?.message}`);
+                }
+                logger.info(`[ShareToTeam] ✓ Copied ${cleanSrc} -> ${cleanDest}`);
+                return true;
+            } catch (err: any) {
+                logger.error(`[ShareToTeam] ✗ Copy error "${cleanSrc}" -> "${cleanDest}": ${err?.message}`);
+                return false;
+            }
+        };
+
+        const results: boolean[] = [];
+
+        // --- Process individual files ---
+        for (const fileId of files) {
+            if (!fileId) continue;
+            const relativePath = toRelative(fileId);
+            const fileName = relativePath.split("/").pop();
+            if (!fileName) continue;
+            const destPath = cleanPath(`${targetPrefix}${fileName}`);
+            results.push(await copyFile(relativePath, destPath));
+        }
+
+        // --- Process folders (recursive) ---
+        for (const folderId of folders) {
+            if (!folderId) continue;
+            let folderPrefix = toRelative(folderId);
+            if (!folderPrefix.endsWith("/")) folderPrefix += "/";
+            folderPrefix = cleanPath(folderPrefix);
+
+            // The folder name is the last non-empty segment of its prefix
+            const segments = folderPrefix.replace(/\/$/, "").split("/");
+            const folderName = segments[segments.length - 1];
+            const destFolderPrefix = cleanPath(`${targetPrefix}${folderName}/`);
+
+            logger.info(`[ShareToTeam] Processing folder: prefix="${folderPrefix}", folderName="${folderName}", destPrefix="${destFolderPrefix}"`);
+
+            try {
+                // Create destination folder marker with creatorSID
+                await bucket.file(destFolderPrefix).save("", {
+                    metadata: { contentType: "application/x-directory", metadata: { creatorSID: sID } }
+                });
+
+                // List and copy all objects under the source folder prefix
+                const [nestedFiles] = await bucket.getFiles({ prefix: folderPrefix });
+                logger.info(`[ShareToTeam] Found ${nestedFiles.length} objects under "${folderPrefix}"`);
+
+                for (const f of nestedFiles) {
+                    if (f.name.endsWith("/")) continue; // skip folder markers
+                    const tail = f.name.substring(folderPrefix.length);
+                    if (!tail) continue; // skip empty tails
+                    const destPath = cleanPath(`${destFolderPrefix}${tail}`);
+                    results.push(await copyFile(f.name, destPath));
+                }
+                logger.info(`[ShareToTeam] Shared folder ${folderPrefix} -> ${destFolderPrefix}`);
+            } catch (err: any) {
+                logger.error(`[ShareToTeam] Folder error ${folderId}: ${err?.message}`);
+                results.push(false);
+            }
+        }
+
+        const successCount = results.filter(Boolean).length;
+        const totalCount = results.length;
+
+        logger.info(`[ShareToTeam] Done: ${successCount}/${totalCount} items copied successfully`);
+
+        return NextResponse.json({
+            success: successCount > 0,
+            message: `Shared ${successCount}/${totalCount} item(s)`,
+            copiedCount: successCount,
+        }, { status: 200 });
+
+    } catch (error: unknown) {
+        logger.error(`[ShareToTeam] Internal Error: ${error}`);
+        return NextResponse.json(
+            { success: false, message: "Internal server error" },
+            { status: 500 }
+        );
+    }
 }
-
-/* ---- Shared Row Layout (used by BOTH header and data rows) ---- */
-.headerRow,
-.tableRow {
-  display: flex;
-  align-items: center;
-  padding: 6px 12px;
-  min-height: 44px;
-}
-
-/* ---- Header Row specifics ---- */
-.headerRow {
-  border-bottom: 2px solid #e0e0e0;
-  background-color: #fafafa;
-  font-weight: 600;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: #9e9e9e;
-  user-select: none;
-  flex-shrink: 0;
-  position: sticky;
-  top: 0;
-  z-index: 2;
-}
-
-/* ---- Table Body ---- */
-.tableBody {
-  flex: 1;
-  overflow-y: auto;
-}
-
-/* ---- Table Row specifics ---- */
-.tableRow {
-  border-bottom: 1px solid #f0f0f0;
-  cursor: pointer;
-  transition: background-color 0.15s ease;
-  user-select: none;
-}
-
-.tableRow:hover {
-  background-color: rgba(25, 118, 210, 0.04);
-}
-
-.tableRow.selected {
-  background-color: rgba(25, 118, 210, 0.10);
-}
-
-.tableRow.selected:hover {
-  background-color: rgba(25, 118, 210, 0.15);
-}
-
-/* ---- Column Cells ---- */
-.cellCheckbox {
-  width: 40px;
-  min-width: 40px;
-  max-width: 40px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-.cellIcon {
-  width: 36px;
-  min-width: 36px;
-  max-width: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-.cellName {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-right: 8px;
-  overflow: hidden;
-}
-
-.nameText {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 14px;
-  color: #212121;
-}
-
-.cellFavorite {
-  width: 36px;
-  min-width: 36px;
-  max-width: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-.cellSharing {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-}
-
-.cellSize {
-  flex: 0.6;
-  min-width: 0;
-  font-size: 13px;
-  color: #757575;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.cellType {
-  flex: 0.6;
-  min-width: 0;
-  font-size: 13px;
-  color: #757575;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.cellTags {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  overflow-y: hidden;
-}
-
-.cellTags::-webkit-scrollbar {
-  display: none;
-}
-
-.tag {
-  display: inline-flex;
-  align-items: center;
-  padding: 4px 10px;
-  border-radius: 12px;
-  font-size: 11px;
-  font-weight: 500;
-  background-color: #f0f4f8;
-  color: #334155;
-  border: 1px solid #e2e8f0;
-  white-space: nowrap;
-  transition: all 0.2s ease;
-}
-
-.cellDate {
-  flex: 0.8;
-  min-width: 0;
-  font-size: 13px;
-  color: #757575;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.cellOwner {
-  flex: 0.6;
-  min-width: 0;
-  font-size: 13px;
-  color: #757575;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.cellDelete {
-  width: 40px;
-  min-width: 40px;
-  max-width: 40px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #757575;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-
-.cellDelete:hover {
-  color: #d32f2f;
-}
-
-.cellSpacer {
-  flex: 1;
-  min-width: 0;
-}
-
-/* ---- Icons ---- */
-.folderIcon {
-  color: #ffc107;
-  font-size: 24px !important;
-}
-
-.fileIcon {
-  font-size: 22px !important;
-}
-
-.pdfIcon {
-  color: #f44336;
-}
-
-.csvIcon {
-  color: #4caf50;
-}
-
-.imgIcon {
-  color: #9c27b0;
-}
-
-.txtIcon {
-  color: #607d8b;
-}
-
-.docIcon {
-  color: #2196f3;
-}
-
-/* Favorite Star */
-.favoriteIcon {
-  cursor: pointer;
-  font-size: 20px !important;
-  transition: color 0.15s ease, transform 0.15s ease;
-}
-
-.favoriteIcon:hover {
-  transform: scale(1.15);
-}
-
-.favoriteActive {
-  color: #ffc107 !important;
-}
-
-.favoriteInactive {
-  color: #bdbdbd !important;
-}
-
-.favoriteInactive:hover {
-  color: #ffc107 !important;
-}
-
-/* Sharing icons */
-.sharingIcon {
-  font-size: 20px !important;
-  color: #9e9e9e;
-}
-
-.personalIcon {
-  color: #1976d2;
-}
-
-.teamIcon {
-  color: #2e7d32;
-}
-
-/* Header cell text (kept for backward compat) */
-.headerCell {
-  cursor: inherit;
-}
-
-/* ---- Header-specific column overrides ---- */
-/* Use these on the header row so labels can be spaced
-   independently from the data-row .cell* widths.        */
-.hdrName {
-  flex: 1;
-  min-width: 0;
-  padding-right: 40px;
-  cursor: pointer;
-}
-
-.hdrSharing {
-  flex: 1;
-  min-width: 0;
-}
-
-.hdrSize {
-  flex: 0.6;
-  min-width: 0;
-  cursor: pointer;
-}
-
-.hdrType {
-  flex: 0.6;
-  min-width: 0;
-  cursor: pointer;
-}
-
-.hdrTags {
-  flex: 1;
-  min-width: 0;
-}
-
-.hdrDate {
-  flex: 0.8;
-  min-width: 0;
-  cursor: pointer;
-}
-
-.hdrOwner {
-  flex: 0.6;
-  min-width: 0;
-  cursor: pointer;
-}
-
-/* Empty state */
-.emptyState {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  height: 200px;
-  color: #9e9e9e;
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-            {/* Table */}
-            <Box className={styles.tableContainer} sx={{ mt: 1 }}>
-                {/* ── Header Row ── */}
-                <Box className={styles.headerRow}>
-                    {!isRootView && (
-                        <Box className={styles.cellCheckbox}>{'\u00A0'}</Box>
-                    )}
-                    <Box className={styles.cellIcon}>{'\u00A0'}</Box>
-                    <Box className={styles.hdrName} onClick={() => {
-                        if (sortColumn === 'name') { setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc'); }
-                        else { setSortColumn('name'); setSortDirection('asc'); }
-                    }}>
-                        Name {sortColumn === 'name' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}
-                    </Box>
-                    <Box className={styles.hdrSharing}>{'\u00A0'}</Box>
-                    {!isRootView && (
-                        <Box className={styles.cellFavorite}>
-                            <StarBorderIcon sx={{ fontSize: 16, color: "#9e9e9e" }} />
-                        </Box>
-                    )}
-                    <Box className={styles.hdrSize} onClick={() => {
-                        if (sortColumn === 'size') { setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc'); }
-                        else { setSortColumn('size'); setSortDirection('asc'); }
-                    }}>
-                        Size {sortColumn === 'size' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}
-                    </Box>
-                    {!isRootView && (
-                        <Box className={styles.hdrType} onClick={() => {
-                            if (sortColumn === 'type') { setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc'); }
-                            else { setSortColumn('type'); setSortDirection('asc'); }
-                        }}>
-                            Type {sortColumn === 'type' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}
-                        </Box>
-                    )}
-                    <Box className={styles.hdrTags}>
-                        Tags
-                    </Box>
-                    <Box className={styles.hdrDate} onClick={() => {
-                        if (sortColumn === 'date') { setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc'); }
-                        else { setSortColumn('date'); setSortDirection('asc'); }
-                    }}>
-                        Date {sortColumn === 'date' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}
-                    </Box>
-                    <Box className={styles.hdrOwner} onClick={() => {
-                        if (sortColumn === 'owner') { setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc'); }
-                        else { setSortColumn('owner'); setSortDirection('asc'); }
-                    }}>
-                        Owner {sortColumn === 'owner' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}
-                    </Box>
-                    <Box className={styles.cellDelete}>{'\u00A0'}</Box>
-                </Box>
