@@ -1,54 +1,488 @@
-import logger from "@/lib/logger";
-import { BigQuery } from "@google-cloud/bigquery";
-import { NextRequest, NextResponse } from "next/server";
-import { SECRET_PROJECT_ID, SECRET_WATCHLIST_DATASET } from "@/lib/env";
+"use client";
+import React, {
+    createContext,
+    useState,
+    useEffect,
+    useCallback,
+    ReactNode,
+    useContext,
+} from "react";
+import {
+    IWatchLists,
+    IWatchlistItem,
+    IWatchListType,
+    IWatchlistState,
+    IWatchlistEvent,
+} from "@/interface";
+import { UserContext } from "./UserContext";
 
-const DATASET = SECRET_WATCHLIST_DATASET || "cbldt-b016-int-2e05.raw_ext_sgam_1832_aiq_interactive_ist";
+// ---------------------------------------------------------------------------
+// Favorites persistence (client-side only — BigQuery doesn't track favorites)
+// ---------------------------------------------------------------------------
+const FAV_STORAGE_KEY = "aiq_watchlist_favorites";
 
-export async function POST(req: NextRequest) {
-    logger.info("Fetching watchlist events via table function");
+const loadFavorites = (): Set<string> => {
     try {
-        const { user_sid, team_code } = await req.json();
+        const raw = localStorage.getItem(FAV_STORAGE_KEY);
+        return raw ? new Set(JSON.parse(raw)) : new Set();
+    } catch {
+        return new Set();
+    }
+};
 
-        if (!user_sid) {
-            return NextResponse.json(
-                { error: "user_sid is required" },
-                { status: 400 }
-            );
+const saveFavorites = (favs: Set<string>) => {
+    try {
+        localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify([...favs]));
+    } catch { /* silently fail */ }
+};
+
+// ---------------------------------------------------------------------------
+// Context
+// ---------------------------------------------------------------------------
+
+const defaultState: IWatchlistState = {
+    watchlists: [],
+    items: [],
+    events: [],
+    isLoading: false,
+    error: null,
+    addWatchlist: async () => { },
+    deleteWatchlist: async () => { },
+    editWatchlist: async () => { },
+    addItem: async () => { },
+    removeItem: async () => { },
+    reorderItems: async () => { },
+    getWatchlistItems: () => [],
+    getItemCount: () => 0,
+    getAllItemsForType: () => [],
+    toggleFavorite: () => { },
+    refreshWatchlists: async () => { },
+    refreshItems: async () => { },
+    refreshEvents: async () => { },
+};
+
+export const WatchlistContext = createContext<IWatchlistState>(defaultState);
+
+// ---------------------------------------------------------------------------
+// Provider
+// ---------------------------------------------------------------------------
+
+export const WatchlistProvider: React.FC<{ children: ReactNode }> = ({
+    children,
+}) => {
+    const { user } = useContext(UserContext);
+    const [watchlists, setWatchlists] = useState<IWatchLists[]>([]);
+    const [items, setItems] = useState<IWatchlistItem[]>([]);
+    const [events, setEvents] = useState<IWatchlistEvent[]>([]);
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [favorites, setFavorites] = useState<Set<string>>(new Set());
+
+    // ---- Fetch watchlists from API ----
+    // Expose this so our initialization check below can use it before the effect runs
+    const fetchWatchlistsInternal = useCallback(async () => {
+        if (!user?.sID) return [];
+        const res = await fetch("/api/watchlist/getWatchlists", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                user_sid: user.sID,
+                team_code: user.teamCode || "",
+            }),
+        });
+        const data = await res.json();
+        return data.watchlists || [];
+    }, [user?.sID, user?.teamCode]);
+
+    const refreshWatchlists = useCallback(async () => {
+        try {
+            const fetched = await fetchWatchlistsInternal();
+            // Merge favorites from localStorage
+            const favs = loadFavorites();
+            const merged = fetched.map((w: IWatchLists) => ({
+                ...w,
+                favorite: favs.has(w.id),
+            }));
+            setWatchlists(merged);
+            setFavorites(favs);
+        } catch (err: any) {
+            console.error("Failed to fetch watchlists:", err);
+            setError(err.message || "Failed to fetch watchlists");
         }
+    }, [fetchWatchlistsInternal]);
 
-        const bigQueryClient = new BigQuery({ projectId: SECRET_PROJECT_ID });
+    // ---- Fetch items from API ----
+    const refreshItems = useCallback(async () => {
+        if (!user?.sID) return;
+        try {
+            const res = await fetch("/api/watchlist/getWatchlistItems", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    watchlist_id: "", // Empty string fetches all items for the user
+                    user_sid: user.sID,
+                    team_code: user.teamCode || "",
+                }),
+            });
+            const data = await res.json();
+            if (data.items) {
+                setItems(data.items);
+            }
+        } catch (err: any) {
+            console.error("Failed to fetch watchlist items:", err);
+            setError(err.message || "Failed to fetch items");
+        }
+    }, [user?.sID, user?.teamCode]);
 
-        // BigQuery requires each part of the path to be individually backticked if they contain hyphens
-        const tablePath = DATASET.split('.').map(p => `\`${p}\``).join('.') + `.\`tf_get_watchlists_events\``;
+    // ---- Fetch events from API ----
+    const refreshEvents = useCallback(async () => {
+        if (!user?.sID) return;
+        try {
+            const res = await fetch("/api/watchlist/getWatchlistEvents", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    user_sid: user.sID,
+                    team_code: user.teamCode || "",
+                }),
+            });
+            const data = await res.json();
+            if (data.events) {
+                setEvents(data.events);
+            }
+        } catch (err: any) {
+            console.error("Failed to fetch watchlist events:", err);
+            // Non-critical — events failing shouldn't block the UI
+        }
+    }, [user?.sID, user?.teamCode]);
 
-        // Call the table function for events (S&P events data feed)
-        const query = `
-            SELECT *
-            FROM ${tablePath}(@user_sid, @team_code)
-        `;
+    // ---- Load on mount / user change ----
+    // Initialize defaults if they don't exist
+    useEffect(() => {
+        if (!user?.sID) return;
 
-        const [rows] = await bigQueryClient.query({
-            query,
-            params: { user_sid, team_code: team_code || "" },
+        const initializeWatchlists = async () => {
+            setIsLoading(true);
+            setError(null);
+            try {
+                // Fetch the watchlists manually first
+                const fetchedLists = await fetchWatchlistsInternal();
+                let needsRefresh = false;
+
+                // Check default user watchlist
+                const hasMyWatchlist = fetchedLists.some(
+                    (w: any) => w.type === "user" && w.name === "My Watchlist"
+                );
+
+                // Check default team watchlist if they have a team
+                let hasTeamWatchlist = true;
+                if (user?.teamCode) {
+                    hasTeamWatchlist = fetchedLists.some(
+                        (w: any) => w.type === "team" && w.name === "My Team Watchlist"
+                    );
+                }
+
+                // If either is missing, create it
+                if (!hasMyWatchlist) {
+                    await fetch("/api/watchlist/addWatchlist", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            user_sid: user.sID,
+                            team_code: user.teamCode || "",
+                            access_group: user.accessGroup || "",
+                            admin_group: "",
+                            watchlist_name: "My Watchlist",
+                            watchlist_description: "Your default personal watchlist",
+                            watchlist_access_level: "user",
+                        }),
+                    });
+                    needsRefresh = true;
+                }
+
+                if (user?.teamCode && !hasTeamWatchlist) {
+                    await fetch("/api/watchlist/addWatchlist", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            user_sid: user.sID,
+                            team_code: user.teamCode || "",
+                            access_group: user.accessGroup || "",
+                            admin_group: "",
+                            watchlist_name: "My Team Watchlist",
+                            watchlist_description: "Your default team watchlist",
+                            watchlist_access_level: "team",
+                        }),
+                    });
+                    needsRefresh = true;
+                }
+
+                // Call the standard refresh paths
+                await Promise.all([
+                    refreshWatchlists(),
+                    refreshItems(),
+                    refreshEvents()
+                ]);
+
+            } catch (err: any) {
+                console.error("Failed initializing watchlists", err);
+            } finally {
+                setIsLoading(false);
+            }
+        };
+
+        initializeWatchlists();
+    }, [user?.sID, user?.teamCode, fetchWatchlistsInternal, refreshWatchlists, refreshItems, refreshEvents]);
+
+    // ---- Mutations ----
+
+    const addWatchlist = useCallback(
+        async (name: string, description: string, type: IWatchListType) => {
+            if (!user?.sID) return;
+            try {
+                setIsLoading(true);
+                await fetch("/api/watchlist/addWatchlist", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        user_sid: user.sID,
+                        team_code: user.teamCode || "",
+                        access_group: user.accessGroup || "",
+                        admin_group: "",
+                        watchlist_name: name,
+                        watchlist_description: description,
+                        watchlist_access_level: type,
+                    }),
+                });
+                await refreshWatchlists();
+            } catch (err: any) {
+                setError(err.message || "Failed to create watchlist");
+            } finally {
+                setIsLoading(false);
+            }
+        },
+        [user, refreshWatchlists]
+    );
+
+    const deleteWatchlist = useCallback(
+        async (id: string) => {
+            if (!user?.sID) return;
+            try {
+                setIsLoading(true);
+                await fetch("/api/watchlist/updateItem", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        action: "deleteWatchlist",
+                        user_sid: user.sID,
+                        id: id,
+                    }),
+                });
+                await Promise.all([refreshWatchlists(), refreshItems()]);
+            } catch (err: any) {
+                setError(err.message || "Failed to delete watchlist");
+            } finally {
+                setIsLoading(false);
+            }
+        },
+        [user?.sID, refreshWatchlists, refreshItems]
+    );
+
+    const editWatchlist = useCallback(
+        async (id: string, name: string, description: string) => {
+            if (!user?.sID) return;
+            try {
+                await fetch("/api/watchlist/updateItem", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        action: "editWatchlist",
+                        user_sid: user.sID,
+                        id: id,
+                        watchlist_name: name,
+                        watchlist_description: description,
+                    }),
+                });
+                await refreshWatchlists();
+            } catch (err: any) {
+                setError(err.message || "Failed to update watchlist");
+            }
+        },
+        [user?.sID, refreshWatchlists]
+    );
+
+    const addItem = useCallback(
+        async (item: Omit<IWatchlistItem, "id" | "rank">) => {
+            if (!user?.sID) return;
+            try {
+                setIsLoading(true);
+                // Get current count for rank
+                const currentItems = items.filter(
+                    (i) => i.watchlistId === item.watchlistId
+                );
+                const watchlist = watchlists.find((w) => w.id === item.watchlistId);
+
+                await fetch("/api/watchlist/addItem", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        user_sid: user.sID,
+                        watchlist_id: item.watchlistId,
+                        watchlist_name: watchlist?.name || "",
+                        watchlist_access_level: item.type || "user",
+                        admin_group: "",
+                        access_group: user.accessGroup || "",
+                        team_code: user.teamCode || "",
+                        ID_BB_COMPANY: item.ID_BB_COMPANY || "",
+                        ticker: item.ticker,
+                        company_name: item.companyName,
+                        item_rank: currentItems.length + 1,
+                    }),
+                });
+                await refreshItems();
+            } catch (err: any) {
+                setError(err.message || "Failed to add item");
+            } finally {
+                setIsLoading(false);
+            }
+        },
+        [user, items, watchlists, refreshItems]
+    );
+
+    const removeItem = useCallback(
+        async (itemId: string) => {
+            if (!user?.sID) return;
+            try {
+                await fetch("/api/watchlist/updateItem", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        action: "remove",
+                        user_sid: user.sID,
+                        watchlist_item_id: itemId,
+                    }),
+                });
+                await refreshItems();
+            } catch (err: any) {
+                setError(err.message || "Failed to remove item");
+            }
+        },
+        [user?.sID, refreshItems]
+    );
+
+    const reorderItems = useCallback(
+        async (watchlistId: string, orderedIds: string[]) => {
+            if (!user?.sID) return;
+            try {
+                const reorderPayload = orderedIds.map((id, index) => ({
+                    watchlist_item_id: id,
+                    item_rank: index + 1,
+                }));
+
+                // Optimistic update locally first
+                setItems((prev) => {
+                    const otherItems = prev.filter(
+                        (i) => i.watchlistId !== watchlistId
+                    );
+                    const reordered = orderedIds
+                        .map((id, index) => {
+                            const found = prev.find((i) => i.id === id);
+                            if (!found) return null;
+                            return { ...found, rank: index + 1 };
+                        })
+                        .filter(Boolean) as IWatchlistItem[];
+                    return [...otherItems, ...reordered];
+                });
+
+                // Then persist to backend
+                await fetch("/api/watchlist/updateItem", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        action: "reorder",
+                        user_sid: user.sID,
+                        items: reorderPayload,
+                    }),
+                });
+            } catch (err: any) {
+                setError(err.message || "Failed to reorder items");
+                // Refresh to get actual state
+                await refreshItems();
+            }
+        },
+        [user?.sID, refreshItems]
+    );
+
+    const getWatchlistItems = useCallback(
+        (watchlistId: string): IWatchlistItem[] => {
+            return items
+                .filter((i) => i.watchlistId === watchlistId)
+                .sort((a, b) => a.rank - b.rank);
+        },
+        [items]
+    );
+
+    const getItemCount = useCallback(
+        (watchlistId: string): number => {
+            return items.filter((i) => i.watchlistId === watchlistId).length;
+        },
+        [items]
+    );
+
+    const getAllItemsForType = useCallback(
+        (type: IWatchListType): IWatchlistItem[] => {
+            const typeWatchlistIds = watchlists
+                .filter((w) => w.type === type)
+                .map((w) => w.id);
+            return items.filter((i) => typeWatchlistIds.includes(i.watchlistId));
+        },
+        [items, watchlists]
+    );
+
+    const toggleFavorite = useCallback((watchlistId: string) => {
+        setFavorites((prev) => {
+            const next = new Set(prev);
+            if (next.has(watchlistId)) {
+                next.delete(watchlistId);
+            } else {
+                next.add(watchlistId);
+            }
+            saveFavorites(next);
+            return next;
         });
 
-        // Map rows to IWatchlistEvent shape
-        const events = (rows || []).map((row: any) => ({
-            ticker: row.ticker || "",
-            company_name: row.company_name || "",
-            event_name: row.event_name || "",
-            event_date: row.event_date || "",
-            event_time: row.event_time || undefined,
-            event_type: row.event_type || undefined,
-        }));
-
-        return NextResponse.json({ events }, { status: 200 });
-    } catch (error: any) {
-        logger.error("Error fetching watchlist events", error);
-        return NextResponse.json(
-            { error: error.message || "Failed to fetch watchlist events" },
-            { status: 500 }
+        // Also update the array state to re-render the UI correctly
+        setWatchlists((prev) =>
+            prev.map((w) =>
+                String(w.id) === String(watchlistId) ? { ...w, favorite: !w.favorite } : w
+            )
         );
-    }
-}
+    }, []);
+
+    return (
+        <WatchlistContext.Provider
+            value={{
+                watchlists,
+                items,
+                events,
+                isLoading,
+                error,
+                addWatchlist,
+                deleteWatchlist,
+                editWatchlist,
+                addItem,
+                removeItem,
+                reorderItems,
+                getWatchlistItems,
+                getItemCount,
+                getAllItemsForType,
+                toggleFavorite,
+                refreshWatchlists,
+                refreshItems,
+                refreshEvents,
+            }}
+        >
+            {children}
+        </WatchlistContext.Provider>
+    );
+};
