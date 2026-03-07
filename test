@@ -1,488 +1,151 @@
-"use client";
-import React, {
-    createContext,
-    useState,
-    useEffect,
-    useCallback,
-    ReactNode,
-    useContext,
-} from "react";
+import React, { useState } from "react";
 import {
-    IWatchLists,
-    IWatchlistItem,
-    IWatchListType,
-    IWatchlistState,
-    IWatchlistEvent,
-} from "@/interface";
-import { UserContext } from "./UserContext";
+    Dialog,
+    DialogTitle,
+    DialogContent,
+    DialogActions,
+    Button,
+    Box,
+    Typography,
+    Alert,
+} from "@mui/material";
+import { ITickerOptions } from "@/interface";
+import { useTickerOptions } from "@/hooks/useTickerOptions";
+import { TickerAutocomplete } from "../TickerAutocomplete";
 
-// ---------------------------------------------------------------------------
-// Favorites persistence (client-side only — BigQuery doesn't track favorites)
-// ---------------------------------------------------------------------------
-const FAV_STORAGE_KEY = "aiq_watchlist_favorites";
+interface AddStockModalProps {
+    open: boolean;
+    onClose: () => void;
+    onAdd: (ticker: string, companyName: string, idBbCompany?: string) => void;
+    existingTickers?: string[];
+}
 
-const loadFavorites = (): Set<string> => {
-    try {
-        const raw = localStorage.getItem(FAV_STORAGE_KEY);
-        return raw ? new Set(JSON.parse(raw)) : new Set();
-    } catch {
-        return new Set();
-    }
-};
-
-const saveFavorites = (favs: Set<string>) => {
-    try {
-        localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify([...favs]));
-    } catch { /* silently fail */ }
-};
-
-// ---------------------------------------------------------------------------
-// Context
-// ---------------------------------------------------------------------------
-
-const defaultState: IWatchlistState = {
-    watchlists: [],
-    items: [],
-    events: [],
-    isLoading: false,
-    error: null,
-    addWatchlist: async () => { },
-    deleteWatchlist: async () => { },
-    editWatchlist: async () => { },
-    addItem: async () => { },
-    removeItem: async () => { },
-    reorderItems: async () => { },
-    getWatchlistItems: () => [],
-    getItemCount: () => 0,
-    getAllItemsForType: () => [],
-    toggleFavorite: () => { },
-    refreshWatchlists: async () => { },
-    refreshItems: async () => { },
-    refreshEvents: async () => { },
-};
-
-export const WatchlistContext = createContext<IWatchlistState>(defaultState);
-
-// ---------------------------------------------------------------------------
-// Provider
-// ---------------------------------------------------------------------------
-
-export const WatchlistProvider: React.FC<{ children: ReactNode }> = ({
-    children,
+const AddStockModal: React.FC<AddStockModalProps> = ({
+    open,
+    onClose,
+    onAdd,
+    existingTickers = [],
 }) => {
-    const { user } = useContext(UserContext);
-    const [watchlists, setWatchlists] = useState<IWatchLists[]>([]);
-    const [items, setItems] = useState<IWatchlistItem[]>([]);
-    const [events, setEvents] = useState<IWatchlistEvent[]>([]);
-    const [isLoading, setIsLoading] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-    const [favorites, setFavorites] = useState<Set<string>>(new Set());
+    const [selectedTicker, setSelectedTicker] = useState<ITickerOptions | null>(null);
+    const [error, setError] = useState("");
+    const { tickerLoadingMessage, tickerOptions, fetchOptions } = useTickerOptions();
 
-    // ---- Fetch watchlists from API ----
-    // Expose this so our initialization check below can use it before the effect runs
-    const fetchWatchlistsInternal = useCallback(async () => {
-        if (!user?.sID) return [];
-        const res = await fetch("/api/watchlist/getWatchlists", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                user_sid: user.sID,
-                team_code: user.teamCode || "",
-            }),
-        });
-        const data = await res.json();
-        return data.watchlists || [];
-    }, [user?.sID, user?.teamCode]);
-
-    const refreshWatchlists = useCallback(async () => {
-        try {
-            const fetched = await fetchWatchlistsInternal();
-            // Merge favorites from localStorage
-            const favs = loadFavorites();
-            const merged = fetched.map((w: IWatchLists) => ({
-                ...w,
-                favorite: favs.has(w.id),
-            }));
-            setWatchlists(merged);
-            setFavorites(favs);
-        } catch (err: any) {
-            console.error("Failed to fetch watchlists:", err);
-            setError(err.message || "Failed to fetch watchlists");
-        }
-    }, [fetchWatchlistsInternal]);
-
-    // ---- Fetch items from API ----
-    const refreshItems = useCallback(async () => {
-        if (!user?.sID) return;
-        try {
-            const res = await fetch("/api/watchlist/getWatchlistItems", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    watchlist_id: "", // Empty string fetches all items for the user
-                    user_sid: user.sID,
-                    team_code: user.teamCode || "",
-                }),
-            });
-            const data = await res.json();
-            if (data.items) {
-                setItems(data.items);
-            }
-        } catch (err: any) {
-            console.error("Failed to fetch watchlist items:", err);
-            setError(err.message || "Failed to fetch items");
-        }
-    }, [user?.sID, user?.teamCode]);
-
-    // ---- Fetch events from API ----
-    const refreshEvents = useCallback(async () => {
-        if (!user?.sID) return;
-        try {
-            const res = await fetch("/api/watchlist/getWatchlistEvents", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    user_sid: user.sID,
-                    team_code: user.teamCode || "",
-                }),
-            });
-            const data = await res.json();
-            if (data.events) {
-                setEvents(data.events);
-            }
-        } catch (err: any) {
-            console.error("Failed to fetch watchlist events:", err);
-            // Non-critical — events failing shouldn't block the UI
-        }
-    }, [user?.sID, user?.teamCode]);
-
-    // ---- Load on mount / user change ----
-    // Initialize defaults if they don't exist
-    useEffect(() => {
-        if (!user?.sID) return;
-
-        const initializeWatchlists = async () => {
-            setIsLoading(true);
-            setError(null);
-            try {
-                // Fetch the watchlists manually first
-                const fetchedLists = await fetchWatchlistsInternal();
-                let needsRefresh = false;
-
-                // Check default user watchlist
-                const hasMyWatchlist = fetchedLists.some(
-                    (w: any) => w.type === "user" && w.name === "My Watchlist"
-                );
-
-                // Check default team watchlist if they have a team
-                let hasTeamWatchlist = true;
-                if (user?.teamCode) {
-                    hasTeamWatchlist = fetchedLists.some(
-                        (w: any) => w.type === "team" && w.name === "My Team Watchlist"
-                    );
-                }
-
-                // If either is missing, create it
-                if (!hasMyWatchlist) {
-                    await fetch("/api/watchlist/addWatchlist", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            user_sid: user.sID,
-                            team_code: user.teamCode || "",
-                            access_group: user.accessGroup || "",
-                            admin_group: "",
-                            watchlist_name: "My Watchlist",
-                            watchlist_description: "Your default personal watchlist",
-                            watchlist_access_level: "user",
-                        }),
-                    });
-                    needsRefresh = true;
-                }
-
-                if (user?.teamCode && !hasTeamWatchlist) {
-                    await fetch("/api/watchlist/addWatchlist", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            user_sid: user.sID,
-                            team_code: user.teamCode || "",
-                            access_group: user.accessGroup || "",
-                            admin_group: "",
-                            watchlist_name: "My Team Watchlist",
-                            watchlist_description: "Your default team watchlist",
-                            watchlist_access_level: "team",
-                        }),
-                    });
-                    needsRefresh = true;
-                }
-
-                // Call the standard refresh paths
-                await Promise.all([
-                    refreshWatchlists(),
-                    refreshItems(),
-                    refreshEvents()
-                ]);
-
-            } catch (err: any) {
-                console.error("Failed initializing watchlists", err);
-            } finally {
-                setIsLoading(false);
-            }
-        };
-
-        initializeWatchlists();
-    }, [user?.sID, user?.teamCode, fetchWatchlistsInternal, refreshWatchlists, refreshItems, refreshEvents]);
-
-    // ---- Mutations ----
-
-    const addWatchlist = useCallback(
-        async (name: string, description: string, type: IWatchListType) => {
-            if (!user?.sID) return;
-            try {
-                setIsLoading(true);
-                await fetch("/api/watchlist/addWatchlist", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        user_sid: user.sID,
-                        team_code: user.teamCode || "",
-                        access_group: user.accessGroup || "",
-                        admin_group: "",
-                        watchlist_name: name,
-                        watchlist_description: description,
-                        watchlist_access_level: type,
-                    }),
-                });
-                await refreshWatchlists();
-            } catch (err: any) {
-                setError(err.message || "Failed to create watchlist");
-            } finally {
-                setIsLoading(false);
-            }
-        },
-        [user, refreshWatchlists]
-    );
-
-    const deleteWatchlist = useCallback(
-        async (id: string) => {
-            if (!user?.sID) return;
-            try {
-                setIsLoading(true);
-                await fetch("/api/watchlist/updateItem", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        action: "deleteWatchlist",
-                        user_sid: user.sID,
-                        id: id,
-                    }),
-                });
-                await Promise.all([refreshWatchlists(), refreshItems()]);
-            } catch (err: any) {
-                setError(err.message || "Failed to delete watchlist");
-            } finally {
-                setIsLoading(false);
-            }
-        },
-        [user?.sID, refreshWatchlists, refreshItems]
-    );
-
-    const editWatchlist = useCallback(
-        async (id: string, name: string, description: string) => {
-            if (!user?.sID) return;
-            try {
-                await fetch("/api/watchlist/updateItem", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        action: "editWatchlist",
-                        user_sid: user.sID,
-                        id: id,
-                        watchlist_name: name,
-                        watchlist_description: description,
-                    }),
-                });
-                await refreshWatchlists();
-            } catch (err: any) {
-                setError(err.message || "Failed to update watchlist");
-            }
-        },
-        [user?.sID, refreshWatchlists]
-    );
-
-    const addItem = useCallback(
-        async (item: Omit<IWatchlistItem, "id" | "rank">) => {
-            if (!user?.sID) return;
-            try {
-                setIsLoading(true);
-                // Get current count for rank
-                const currentItems = items.filter(
-                    (i) => i.watchlistId === item.watchlistId
-                );
-                const watchlist = watchlists.find((w) => w.id === item.watchlistId);
-
-                await fetch("/api/watchlist/addItem", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        user_sid: user.sID,
-                        watchlist_id: item.watchlistId,
-                        watchlist_name: watchlist?.name || "",
-                        watchlist_access_level: item.type || "user",
-                        admin_group: "",
-                        access_group: user.accessGroup || "",
-                        team_code: user.teamCode || "",
-                        ID_BB_COMPANY: item.ID_BB_COMPANY || "",
-                        ticker: item.ticker,
-                        company_name: item.companyName,
-                        item_rank: currentItems.length + 1,
-                    }),
-                });
-                await refreshItems();
-            } catch (err: any) {
-                setError(err.message || "Failed to add item");
-            } finally {
-                setIsLoading(false);
-            }
-        },
-        [user, items, watchlists, refreshItems]
-    );
-
-    const removeItem = useCallback(
-        async (itemId: string) => {
-            if (!user?.sID) return;
-            try {
-                await fetch("/api/watchlist/updateItem", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        action: "remove",
-                        user_sid: user.sID,
-                        watchlist_item_id: itemId,
-                    }),
-                });
-                await refreshItems();
-            } catch (err: any) {
-                setError(err.message || "Failed to remove item");
-            }
-        },
-        [user?.sID, refreshItems]
-    );
-
-    const reorderItems = useCallback(
-        async (watchlistId: string, orderedIds: string[]) => {
-            if (!user?.sID) return;
-            try {
-                const reorderPayload = orderedIds.map((id, index) => ({
-                    watchlist_item_id: id,
-                    item_rank: index + 1,
-                }));
-
-                // Optimistic update locally first
-                setItems((prev) => {
-                    const otherItems = prev.filter(
-                        (i) => i.watchlistId !== watchlistId
-                    );
-                    const reordered = orderedIds
-                        .map((id, index) => {
-                            const found = prev.find((i) => i.id === id);
-                            if (!found) return null;
-                            return { ...found, rank: index + 1 };
-                        })
-                        .filter(Boolean) as IWatchlistItem[];
-                    return [...otherItems, ...reordered];
-                });
-
-                // Then persist to backend
-                await fetch("/api/watchlist/updateItem", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        action: "reorder",
-                        user_sid: user.sID,
-                        items: reorderPayload,
-                    }),
-                });
-            } catch (err: any) {
-                setError(err.message || "Failed to reorder items");
-                // Refresh to get actual state
-                await refreshItems();
-            }
-        },
-        [user?.sID, refreshItems]
-    );
-
-    const getWatchlistItems = useCallback(
-        (watchlistId: string): IWatchlistItem[] => {
-            return items
-                .filter((i) => i.watchlistId === watchlistId)
-                .sort((a, b) => a.rank - b.rank);
-        },
-        [items]
-    );
-
-    const getItemCount = useCallback(
-        (watchlistId: string): number => {
-            return items.filter((i) => i.watchlistId === watchlistId).length;
-        },
-        [items]
-    );
-
-    const getAllItemsForType = useCallback(
-        (type: IWatchListType): IWatchlistItem[] => {
-            const typeWatchlistIds = watchlists
-                .filter((w) => w.type === type)
-                .map((w) => w.id);
-            return items.filter((i) => typeWatchlistIds.includes(i.watchlistId));
-        },
-        [items, watchlists]
-    );
-
-    const toggleFavorite = useCallback((watchlistId: string) => {
-        setFavorites((prev) => {
-            const next = new Set(prev);
-            if (next.has(watchlistId)) {
-                next.delete(watchlistId);
-            } else {
-                next.add(watchlistId);
-            }
-            saveFavorites(next);
-            return next;
-        });
-
-        // Also update the array state to re-render the UI correctly
-        setWatchlists((prev) =>
-            prev.map((w) =>
-                String(w.id) === String(watchlistId) ? { ...w, favorite: !w.favorite } : w
-            )
+    const isDuplicate =
+        selectedTicker !== null &&
+        existingTickers.some(
+            (t) => t.toUpperCase() === selectedTicker.code.trim().toUpperCase()
         );
-    }, []);
+
+    const handleSubmit = () => {
+        if (!selectedTicker) {
+            setError("Please select a ticker from the dropdown.");
+            return;
+        }
+
+        if (isDuplicate) {
+            setError(`${selectedTicker.code} is already in this watchlist.`);
+            return;
+        }
+
+        onAdd(selectedTicker.code.trim().toUpperCase(), selectedTicker.name, selectedTicker.company_id);
+        setSelectedTicker(null);
+        setError("");
+        onClose();
+    };
+
+    const handleClose = () => {
+        setSelectedTicker(null);
+        setError("");
+        onClose();
+    };
 
     return (
-        <WatchlistContext.Provider
-            value={{
-                watchlists,
-                items,
-                events,
-                isLoading,
-                error,
-                addWatchlist,
-                deleteWatchlist,
-                editWatchlist,
-                addItem,
-                removeItem,
-                reorderItems,
-                getWatchlistItems,
-                getItemCount,
-                getAllItemsForType,
-                toggleFavorite,
-                refreshWatchlists,
-                refreshItems,
-                refreshEvents,
+        <Dialog
+            open={open}
+            onClose={handleClose}
+            maxWidth="sm"
+            fullWidth
+            PaperProps={{
+                sx: { borderRadius: 2 },
             }}
         >
-            {children}
-        </WatchlistContext.Provider>
+            <DialogTitle sx={{ fontWeight: 600 }}>
+                Add Stock to Watchlist
+            </DialogTitle>
+            <DialogContent>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                    Search for a ticker and select it from the dropdown. The stock
+                    will be added at the bottom of your watchlist.
+                </Typography>
+
+                {error && (
+                    <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError("")}>
+                        {error}
+                    </Alert>
+                )}
+
+                <Box display="flex" flexDirection="column" gap={2} mt={1}>
+                    <TickerAutocomplete
+                        options={tickerOptions}
+                        sx={{ width: "100%" }}
+                        fetchOptions={fetchOptions}
+                        value={selectedTicker}
+                        tickerLoadingMessage={tickerLoadingMessage}
+                        showHelperText={isDuplicate}
+                        helperText={isDuplicate ? `${selectedTicker?.code} already exists in this watchlist` : ""}
+                        handleFilterUpdate={(_event, newValue, _reason) => {
+                            setSelectedTicker(newValue);
+                            setError("");
+                        }}
+                    />
+
+                    {selectedTicker && !isDuplicate && (
+                        <Box sx={{ p: 1.5, bgcolor: 'action.hover', borderRadius: 1 }}>
+                            <Typography variant="body2" color="text.secondary">
+                                Company
+                            </Typography>
+                            <Typography variant="body1" fontWeight={500}>
+                                {selectedTicker.name}
+                            </Typography>
+                            {selectedTicker.sector && (
+                                <>
+                                    <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                                        Sector
+                                    </Typography>
+                                    <Typography variant="body2">
+                                        {selectedTicker.sector}
+                                    </Typography>
+                                </>
+                            )}
+                            {selectedTicker.industry && (
+                                <>
+                                    <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                                        Industry
+                                    </Typography>
+                                    <Typography variant="body2">
+                                        {selectedTicker.industry}
+                                    </Typography>
+                                </>
+                            )}
+                        </Box>
+                    )}
+                </Box>
+            </DialogContent>
+            <DialogActions sx={{ px: 3, pb: 2 }}>
+                <Button onClick={handleClose} sx={{ textTransform: "none" }}>
+                    Cancel
+                </Button>
+                <Button
+                    onClick={handleSubmit}
+                    variant="contained"
+                    disabled={!selectedTicker || isDuplicate}
+                    sx={{ textTransform: "none" }}
+                >
+                    Add Stock
+                </Button>
+            </DialogActions>
+        </Dialog>
     );
 };
+
+export default AddStockModal;
