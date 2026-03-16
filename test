@@ -1,151 +1,2135 @@
-import React, { useState } from "react";
+import React, { useState, useMemo, useContext, useCallback, useEffect, useRef } from "react";
 import {
+    Box,
+    Typography,
+    Button,
+    Breadcrumbs,
+    Link,
     Dialog,
     DialogTitle,
     DialogContent,
     DialogActions,
-    Button,
-    Box,
-    Typography,
-    Alert,
+    TextField,
+    CircularProgress,
+    Menu,
+    MenuItem,
+    ListItemIcon,
+    ListItemText,
+    TablePagination,
+    Popover,
 } from "@mui/material";
-import { ITickerOptions } from "@/interface";
-import { useTickerOptions } from "@/hooks/useTickerOptions";
-import { TickerAutocomplete } from "../TickerAutocomplete";
+import ArrowBackIcon from "@mui/icons-material/ArrowBack";
+import HomeIcon from "@mui/icons-material/Home";
+import NavigateNextIcon from "@mui/icons-material/NavigateNext";
+import DriveFileRenameOutlineIcon from "@mui/icons-material/DriveFileRenameOutline";
+import DownloadIcon from "@mui/icons-material/Download";
+import DeleteIcon from "@mui/icons-material/Delete";
+import PaletteIcon from "@mui/icons-material/Palette";
+import StarBorderIcon from "@mui/icons-material/StarBorder";
+import ShareIcon from "@mui/icons-material/Share";
+import ReplyIcon from '@mui/icons-material/Reply';
+import FileCopyIcon from '@mui/icons-material/FileCopy';
+import FolderItem from "./FolderItem";
+import { UploadDocumentsDialog } from "./UploadDocumentsDialog";
+import { MoveFilesDialog } from "./MoveFilesDialog";
+import ShareToTeamDialog from "./ShareToTeamDialog";
+import { MoveCopyDialog } from './MoveCopyDialog';
+import { SECRET_GCS_FILE_UPLOAD_BUCKET } from "@/lib/env";
+import { SearchFilterBar } from "../SearchFilterBar";
+import {
+    IFolder,
+    IFolderFile,
+    IFolderFilters,
+} from "@/interfaces/folderInterfaces";
+import { IGCSFile } from "@/interface";
+import { fetchData } from "@/lib/utils";
 
-interface AddStockModalProps {
-    open: boolean;
-    onClose: () => void;
-    onAdd: (ticker: string, companyName: string, idBbCompany?: string) => void;
-    existingTickers?: string[];
+import { UserContext } from "@/context/UserContext";
+import { useSelectedTeam } from "@/context/SelectedTeamContext";
+import { useNotification } from "@/context/NotificationContext";
+import styles from "./FolderStructure.module.css";
+
+// ─── Helpers ─────────────────────────────────────────────
+const FAVORITES_KEY_PREFIX = "folder_favorites_";
+
+const getFavoritesKey = (sID: string) => `${FAVORITES_KEY_PREFIX}${sID}`;
+
+const loadFavorites = (sID: string): Set<string> => {
+    try {
+        const raw = localStorage.getItem(getFavoritesKey(sID));
+        if (raw) return new Set(JSON.parse(raw));
+    } catch { /* ignore */ }
+    return new Set();
+};
+
+const saveFavorites = (sID: string, favorites: Set<string>) => {
+    localStorage.setItem(getFavoritesKey(sID), JSON.stringify([...favorites]));
+};
+
+// Folder colors persistence
+const FOLDER_COLORS_KEY_PREFIX = "folder_colors_";
+const getFolderColorsKey = (sID: string) => `${FOLDER_COLORS_KEY_PREFIX}${sID}`;
+
+const loadFolderColors = (sID: string): Record<string, string> => {
+    try {
+        const raw = localStorage.getItem(getFolderColorsKey(sID));
+        if (raw) return JSON.parse(raw);
+    } catch { /* ignore */ }
+    return {};
+};
+
+const saveFolderColors = (sID: string, colors: Record<string, string>) => {
+    localStorage.setItem(getFolderColorsKey(sID), JSON.stringify(colors));
+};
+
+const PRESET_FOLDER_COLORS = [
+    "#90a4ae", // default grey
+    "#42a5f5", // blue
+    "#66bb6a", // green
+    "#ffa726", // orange
+    "#ef5350", // red
+    "#ab47bc", // purple
+    "#26c6da", // cyan
+    "#ec407a", // pink
+    "#ffee58", // yellow
+    "#8d6e63", // brown
+    "#212121", // dark black
+];
+
+const mapGcsToFolderFile = (gcsFile: IGCSFile, ownerSID: string): IFolderFile => {
+    let folderId = "personal";
+    if (gcsFile.filePath) {
+        const parts = gcsFile.filePath.split("/");
+        if (parts.length > 5) {
+            parts.pop();
+            folderId = parts.join("/") + "/";
+        }
+    }
+    return {
+        id: gcsFile.id || gcsFile.filePath,
+        name: gcsFile.name,
+        size: typeof gcsFile.size === "number" ? gcsFile.size : Number(gcsFile.size) || 0,
+        filePath: gcsFile.filePath,
+        contentType: gcsFile.contentType,
+        updated: gcsFile.updated ? new Date(gcsFile.updated) : new Date(),
+        tokenCount: gcsFile.tokenCount || "0",
+        folderType: "personal",
+        folderId,
+        ownerSID,
+        createdAt: (() => {
+            // Try uploadedAt first, then createdAt from GCS timeCreated, then updated
+            const candidates = [gcsFile.uploadedAt, gcsFile.createdAt, gcsFile.updated];
+            for (const c of candidates) {
+                if (c) {
+                    const d = new Date(c);
+                    if (!isNaN(d.getTime())) return d;
+                }
+            }
+            return new Date();
+        })(),
+        uploadedAt: gcsFile.uploadedAt,
+        tags: gcsFile.tags || [],
+        creatorSID: (gcsFile as any).creatorSID || (gcsFile as any).metadata?.metadata?.creatorSID,
+    } as any;
+};
+
+// ─── Component Props ───────────────────────────────────────
+interface IFolderStructureProps {
+    onFileSelect?: (file: IFolderFile) => void;
+    onFileOpen?: (file: IFolderFile) => void;
+    onFolderSelect?: (folder: IFolder) => void;
+    showDeleteButton?: boolean;
+    files?: IFolderFile[];
+    onRename?: (item: IFolder | IFolderFile, newName: string) => void;
+    onDownload?: (item: IFolder | IFolderFile | (IFolder | IFolderFile)[]) => void;
+    onDelete?: (item: IFolder | IFolderFile | (IFolder | IFolderFile)[]) => void;
+    onBulkDeleteClick?: () => void;
+    onUploadSuccess?: () => void;
+    onShare?: (file: IFolderFile) => void;
+    onShareToTeam?: (items: (IFolder | IFolderFile)[], targetFolderId: string) => void;
+    onSelectionChange?: (selectedIds: string[], selectedItems: (IFolder | IFolderFile)[], resolvedFiles: IFolderFile[]) => void;
+    onDataChange?: () => void;
+    initialSelectedIds?: string[];
+    onNavigateToPersonal?: () => void;
 }
 
-const AddStockModal: React.FC<AddStockModalProps> = ({
-    open,
-    onClose,
-    onAdd,
-    existingTickers = [],
+// ─── Component ─────────────────────────────────────────────
+const FolderStructure: React.FC<IFolderStructureProps> = ({
+    onFileSelect,
+    onFileOpen,
+    onFolderSelect,
+    files: externalFiles,
+    onRename,
+    onDownload,
+    onDelete,
+    onBulkDeleteClick,
+    onUploadSuccess,
+    onShareToTeam,
+    onSelectionChange,
+    onDataChange,
+    initialSelectedIds,
+    onNavigateToPersonal,
 }) => {
-    const [selectedTicker, setSelectedTicker] = useState<ITickerOptions | null>(null);
-    const [error, setError] = useState("");
-    const { tickerLoadingMessage, tickerOptions, fetchOptions } = useTickerOptions();
+    const { user } = useContext(UserContext);
+    const { selectedTeam } = useSelectedTeam();
+    const { showNotification } = useNotification();
+    console.log("[DEBUG FolderStructure] RENDER", { sID: user?.sID, teamCode: user?.teamCode });
 
-    const isDuplicate =
-        selectedTicker !== null &&
-        existingTickers.some(
-            (t) => t.toUpperCase() === selectedTicker.code.trim().toUpperCase()
+    // Navigation state
+    const [currentFolder, setCurrentFolder] = useState<IFolder | null>(null);
+    const [breadcrumbs, setBreadcrumbs] = useState<IFolder[]>([]);
+
+    // Selection state (multi-select with shift)
+    const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set(initialSelectedIds || []));
+    const [lastClickedIndex, setLastClickedIndex] = useState<number | null>(null);
+    const [shiftAnchorIndex, setShiftAnchorIndex] = useState<number | null>(null);
+
+    // Search and filter state
+    const [searchQuery, setSearchQuery] = useState("");
+    const [filters, setFilters] = useState<IFolderFilters>({});
+
+    // Pagination state
+    const [page, setPage] = useState(0);
+    const [rowsPerPage, setRowsPerPage] = useState(20);
+
+    // Sort state
+    const [sortColumn, setSortColumn] = useState<string | null>(null);
+    const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+
+    // Favorites
+    const [favorites, setFavorites] = useState<Set<string>>(new Set());
+
+    // Folder colors
+    const [folderColors, setFolderColors] = useState<Record<string, string>>({});
+    const [colorPickerAnchor, setColorPickerAnchor] = useState<HTMLElement | null>(null);
+    const [colorPickerFolderId, setColorPickerFolderId] = useState<string | null>(null);
+
+    // Ref for onSelectionChange to avoid dependency loop
+    const onSelectionChangeRef = useRef(onSelectionChange);
+    useEffect(() => {
+        onSelectionChangeRef.current = onSelectionChange;
+    });
+
+
+
+    // Add folder dialog state
+    const [showAddFolderDialog, setShowAddFolderDialog] = useState(false);
+    const [newFolderName, setNewFolderName] = useState("");
+    const [isCreatingFolder, setIsCreatingFolder] = useState(false);
+
+    // native Delete dialog state
+    const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+    const [itemsToDelete, setItemsToDelete] = useState<(IFolder | IFolderFile)[]>([]);
+    const [isDeleting, setIsDeleting] = useState(false);
+
+    // Context Menu State
+    const [contextMenu, setContextMenu] = useState<{
+        mouseX: number;
+        mouseY: number;
+        item: IFolder | IFolderFile;
+        isFolder: boolean;
+    } | null>(null);
+
+    // Rename Dialog State
+    const [renameDialogOpen, setRenameDialogOpen] = useState(false);
+    const [newName, setNewName] = useState("");
+    const [isRenaming, setIsRenaming] = useState(false);
+
+    // Share to Team Dialog State
+    const [shareDialogOpen, setShareDialogOpen] = useState(false);
+
+    // Move/Copy Dialog State
+    const [moveCopyState, setMoveCopyState] = useState<{
+        open: boolean;
+        mode: 'move' | 'copy';
+        items: (IFolder | IFolderFile)[];
+        isProcessing: boolean;
+    }>({ open: false, mode: 'move', items: [], isProcessing: false });
+
+    // GCS Personal files state
+    const [personalFiles, setPersonalFiles] = useState<IFolderFile[]>([]);
+    const [personalFolders, setPersonalFolders] = useState<IFolder[]>([]);
+    const [isLoadingPersonal, setIsLoadingPersonal] = useState(false);
+
+    // GCS Team files state
+    const [teamFiles, setTeamFiles] = useState<IFolderFile[]>([]);
+    const [teamFolders, setTeamFolders] = useState<IFolder[]>([]);
+    const [isLoadingTeam, setIsLoadingTeam] = useState(false);
+
+    const [isGlobalLoading, setIsGlobalLoading] = useState(true);
+
+    const refreshAllData = useCallback(async () => {
+        if (!user?.sID) return;
+        setIsGlobalLoading(true);
+
+        try {
+            const teamCodesString = user.teamCode || ""; // Fall back from previous selectedTeam dependency if strictly globally fetching all
+            const [personalRes, teamRes] = await Promise.all([
+                fetch("/api/uploadDocuments/getDocuments", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ sID: user.sID }),
+                    cache: "no-store"
+                }).catch(() => null),
+                teamCodesString ? fetch("/api/uploadDocuments/getTeamDocuments", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ teamCode: teamCodesString, sID: user.sID }),
+                    cache: "no-store"
+                }).catch(() => null) : Promise.resolve(null)
+            ]);
+
+            // --- Process Personal ---
+            if (personalRes && personalRes.status === 200) {
+                const pData = await personalRes.json();
+                const gcsFiles: IGCSFile[] = pData?.files || [];
+                setPersonalFiles(gcsFiles.map((f) => mapGcsToFolderFile(f, user.sID)));
+
+                const gcsFolders = (pData?.folders || []).map((f: { id: string; name: string; path: string; createdAt?: string }) => {
+                    let parentId = "personal";
+                    const parts = f.path.replace(/\/$/, "").split("/");
+                    if (parts.length > 5) {
+                        parts.pop();
+                        parentId = parts.join("/") + "/";
+                    }
+                    return {
+                        id: f.id,
+                        name: f.name,
+                        type: "personal" as const,
+                        path: f.path,
+                        ownerSID: user.sID,
+                        createdAt: f.createdAt ? new Date(f.createdAt) : new Date(),
+                        fileCount: 0,
+                        parentId,
+                        depth: Math.max(1, parts.length - 4),
+                    };
+                });
+                setPersonalFolders(gcsFolders);
+            } else {
+                setPersonalFiles([]);
+                setPersonalFolders([]);
+            }
+
+            // --- Process Teams ---
+            if (teamRes && teamRes.status === 200) {
+                const tData = await teamRes.json();
+                const gcsFiles: IGCSFile[] = tData?.files || [];
+                setTeamFiles(gcsFiles.map((f) => {
+                    const mapped = mapGcsToFolderFile(f, user.sID);
+                    mapped.folderType = "team";
+                    mapped.creatorSID = (f as any).creatorSID || null;
+                    if (f.filePath) {
+                        const parts = f.filePath.split("/");
+                        if (parts.length > 5) {
+                            parts.pop();
+                            mapped.folderId = parts.join("/") + "/";
+                        } else {
+                            mapped.folderId = `team_${parts[3]}`;
+                        }
+                    }
+                    return mapped;
+                }));
+
+                const gcsFolders = (tData?.folders || []).map((f: { id: string; name: string; path: string; creatorSID?: string; createdAt?: string }) => {
+                    const parts = f.path.replace(/\/$/, "").split("/");
+                    let parentId = `team_${parts[3]}`;
+                    if (parts.length > 5) {
+                        parts.pop();
+                        parentId = parts.join("/") + "/";
+                    }
+                    return {
+                        id: f.id,
+                        name: f.name,
+                        type: "team" as const,
+                        path: f.path,
+                        ownerSID: user.sID,
+                        creatorSID: f.creatorSID || null,
+                        teamCode: parts[3],
+                        createdAt: f.createdAt ? new Date(f.createdAt) : new Date(),
+                        fileCount: 0,
+                        parentId,
+                        depth: Math.max(1, parts.length - 4),
+                    };
+                });
+                setTeamFolders(gcsFolders);
+            } else {
+                setTeamFiles([]);
+                setTeamFolders([]);
+            }
+        } catch (error) {
+            console.error("Global Authoritative Fetch Error:", error);
+        } finally {
+            setIsGlobalLoading(false);
+            onDataChange?.();
+        }
+    }, [user?.sID, user?.teamCode]);
+
+    useEffect(() => {
+        refreshAllData();
+    }, [refreshAllData]);
+
+    const isLoading = isGlobalLoading;
+
+    const isFirstFolderMount = useRef(true);
+    // Clear selection when changing folders
+    useEffect(() => {
+        if (isFirstFolderMount.current) {
+            isFirstFolderMount.current = false;
+            return;
+        }
+        setSelectedIds(new Set());
+        setPage(0);
+    }, [currentFolder?.id]);
+
+    // Sync external selection changes
+    useEffect(() => {
+        if (initialSelectedIds && initialSelectedIds.length > 0) {
+            setSelectedIds(prev => {
+                if (prev.size === initialSelectedIds.length && initialSelectedIds.every(id => prev.has(id))) {
+                    return prev;
+                }
+                return new Set(initialSelectedIds);
+            });
+        }
+    }, [initialSelectedIds]);
+
+    // Ref for keyboard handling
+    const tableBodyRef = useRef<HTMLDivElement>(null);
+
+    // Bug 1 & 12: Stable dates for root system folders so timestamps don't reset on re-render
+    const rootFolderDatesRef = useRef<Record<string, Date>>({});
+    const getRootFolderDate = (id: string): Date => {
+        if (!rootFolderDatesRef.current[id]) {
+            rootFolderDatesRef.current[id] = new Date();
+        }
+        return rootFolderDatesRef.current[id];
+    };
+
+    // Load favorites from localStorage
+    useEffect(() => {
+        if (user?.sID) {
+            setFavorites(loadFavorites(user.sID));
+            setFolderColors(loadFolderColors(user.sID));
+        }
+    }, [user?.sID]);
+
+    // ─── Data ────────────────────────────────────────────────
+    const { folders, files } = useMemo(() => {
+        if (!user || !selectedTeam) {
+            return { folders: [], files: [] };
+        }
+
+        const sourceFiles = externalFiles || personalFiles;
+
+        // If there's a search query at the root, flatten everything for a unified search across personal + team
+        if (!currentFolder && searchQuery) {
+            return {
+                folders: [...personalFolders, ...teamFolders],
+                files: [...sourceFiles, ...teamFiles]
+            };
+        }
+
+        // Root level — build system folders inline
+        if (!currentFolder) {
+            const rootFolders: IFolder[] = [
+                {
+                    id: "personal",
+                    name: "Personal",
+                    type: "personal",
+                    path: `${user.sID}/personal`,
+                    ownerSID: user.sID,
+                    createdAt: getRootFolderDate("personal"),
+                    fileCount: sourceFiles.length,
+                    isSystemFolder: true,
+                    depth: 0,
+                },
+            ];
+
+            const teamsStr = user.teamCode || "";
+            const activeTeams = teamsStr.split(",").map((tc: string) => tc.trim()).filter(Boolean);
+            activeTeams.forEach((tc: string) => {
+                const displayName = tc || "Unknown Team";
+                rootFolders.push({
+                    id: `team_${tc}`,
+                    name: displayName,
+                    type: "team",
+                    path: `${tc}/`,
+                    ownerSID: user.sID,
+                    teamCode: tc,
+                    createdAt: getRootFolderDate(`team_${tc}`),
+                    fileCount: isGlobalLoading ? -1 : (
+                        teamFiles.filter(f => {
+                            const fId = f.folderId || '';
+                            return fId === `team_${tc}` || fId.startsWith(`team_${tc}`);
+                        }).length +
+                        teamFolders.filter(f => f.parentId === `team_${tc}`).length
+                    ),
+                    isSystemFolder: true,
+                    depth: 0,
+                } as any);
+            });
+
+            return {
+                folders: rootFolders,
+                files: sourceFiles,
+            };
+        }
+
+        // Inside Personal folder — show GCS subfolders and files
+        if (currentFolder && currentFolder.type === "personal") {
+            const isRoot = currentFolder.id === "personal";
+            const targetFolderId = currentFolder.id;
+
+            const pFolders = personalFolders.filter((f) => f.parentId === targetFolderId).map(f => ({
+                ...f,
+                fileCount: sourceFiles.filter(file => file.folderId === f.id || (file as any).path?.startsWith(f.path || f.id)).length
+            }));
+            const pFiles = sourceFiles.filter(
+                (f) => f.folderId === targetFolderId || (!f.folderId && isRoot)
+            );
+            return { folders: pFolders, files: pFiles };
+        }
+
+        // Inside Team folder root — show team GCS subfolders and files
+        if (currentFolder && currentFolder.type === "team" && currentFolder.isSystemFolder) {
+            const rootId = currentFolder.id;
+            const tFolders = teamFolders.filter((f) => f.parentId === rootId).map(f => ({
+                ...f,
+                fileCount: teamFiles.filter(file => file.folderId === f.id || (file as any).path?.startsWith(f.path || f.id)).length
+            }));
+            const tFiles = teamFiles.filter(
+                (f) => f.folderId === rootId
+            );
+            return { folders: tFolders, files: tFiles };
+        }
+
+        // Inside Team subfolder
+        if (currentFolder && currentFolder.type === "team" && !currentFolder.isSystemFolder) {
+            const tSubFolders = teamFolders.filter((f) => f.parentId === currentFolder.id).map(f => ({
+                ...f,
+                fileCount: teamFiles.filter(file => file.folderId === f.id || (file as any).path?.startsWith(f.path || f.id)).length
+            }));
+            const tSubFiles = teamFiles.filter(
+                (f) => f.folderId === currentFolder.id
+            );
+            return { folders: tSubFolders, files: tSubFiles };
+        }
+
+        return { folders: [], files: [] };
+    }, [currentFolder, user, selectedTeam, externalFiles, personalFiles, personalFolders, teamFiles, teamFolders, searchQuery]);
+
+    // ─── Helper: get item type string ──────────────────────────
+    const getItemTypeStr = (item: IFolder | IFolderFile, isFolder: boolean): string => {
+        if (isFolder) return 'Folder';
+        const name = (item as IFolderFile).name || '';
+        return name.includes('.') ? name.split('.').pop()!.toLowerCase() : '';
+    };
+
+    // ─── Helper: get item size for sorting ───────────────────
+    const getItemSizeForSort = (item: IFolder | IFolderFile, isFolder: boolean): number => {
+        if (isFolder) return (item as IFolder).fileCount || 0;
+        return (item as IFolderFile).size || 0;
+    };
+
+    // ─── Unified sort function for both folders and files ────
+    const unifiedSort = (
+        aItem: IFolder | IFolderFile, aIsFolder: boolean,
+        bItem: IFolder | IFolderFile, bIsFolder: boolean
+    ): number => {
+        // Favorites always first
+        const aFav = favorites.has(aItem.id) ? -1 : 0;
+        const bFav = favorites.has(bItem.id) ? -1 : 0;
+        if (aFav !== bFav) return aFav - bFav;
+
+        if (sortColumn) {
+            const dir = sortDirection === 'asc' ? 1 : -1;
+            switch (sortColumn) {
+                case 'name':
+                    return dir * (aItem.name || '').localeCompare(bItem.name || '');
+                case 'size':
+                    return dir * (getItemSizeForSort(aItem, aIsFolder) - getItemSizeForSort(bItem, bIsFolder));
+                case 'type': {
+                    const aType = getItemTypeStr(aItem, aIsFolder);
+                    const bType = getItemTypeStr(bItem, bIsFolder);
+                    return dir * aType.localeCompare(bType);
+                }
+                case 'date': {
+                    const aT = aItem.createdAt ? new Date(aItem.createdAt).getTime() : 0;
+                    const bT = bItem.createdAt ? new Date(bItem.createdAt).getTime() : 0;
+                    return dir * (aT - bT);
+                }
+                case 'owner':
+                    return dir * ((aItem as any).creatorSID || (aItem as any).ownerSID || '').localeCompare((bItem as any).creatorSID || (bItem as any).ownerSID || '');
+                default:
+                    return 0;
+            }
+        }
+        return 0;
+    };
+
+    // ─── Filtered + Sorted (favorites first) ────────────────
+    const filteredFoldersRaw = useMemo(() => {
+        // When a file type filter is active, hide folders since type filters apply only to files
+        if (filters.fileType) return [];
+
+        let result = folders;
+        if (searchQuery) {
+            result = result.filter((f) =>
+                String(f.name || "").toLowerCase().includes(searchQuery.toLowerCase())
+            );
+        }
+
+        // Date range filter
+        if (filters.dateRange && filters.dateRange !== "all") {
+            const now = new Date();
+            const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+
+            result = result.filter((f) => {
+                const folderDate = f.createdAt ? new Date(f.createdAt) : null;
+                if (!folderDate || isNaN(folderDate.getTime())) return false;
+
+                const targetTime = folderDate.getTime();
+
+                switch (filters.dateRange) {
+                    case "today": {
+                        return targetTime >= todayStart;
+                    }
+                    case "week": {
+                        const weekAgoStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7).getTime();
+                        return targetTime >= weekAgoStart;
+                    }
+                    case "month": {
+                        const monthAgoStart = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate()).getTime();
+                        return targetTime >= monthAgoStart;
+                    }
+                    default:
+                        return true;
+                }
+            });
+        }
+
+        return result;
+    }, [folders, searchQuery, favorites, filters, filters.fileType, sortColumn, sortDirection]);
+
+    const filteredFilesRaw = useMemo(() => {
+        let result = files;
+        // At root level, only show files when there's a search query
+        if (!currentFolder && !searchQuery) {
+            return [];
+        }
+        // Helper to extract clean tag code (same logic as FolderItem)
+        const extractTagCode = (tag: any): string => {
+            if (typeof tag === "object" && tag !== null && tag.code) return tag.code;
+            if (typeof tag === "string") {
+                const trimmed = tag.trim();
+                if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+                    try {
+                        const parsed = JSON.parse(trimmed);
+                        if (parsed.code) return parsed.code;
+                        return "";
+                    } catch (e) { }
+                }
+                const codeMatch = trimmed.match(/code:\s*(.*?)[\)\]\}]/i);
+                if (codeMatch && codeMatch[1]) return codeMatch[1].trim();
+                const bracketOnly = trimmed.match(/^[\[\(](.*?)[\]\)]$/);
+                if (bracketOnly && bracketOnly[1]) {
+                    const innerContent = bracketOnly[1];
+                    const codeKV = innerContent.match(/code:\s*([^\)|\]|,]+)/i);
+                    if (codeKV) return codeKV[1].trim();
+                    return innerContent.replace(/^name:\s*/i, "").trim();
+                }
+                return trimmed.replace(/^code:\s*/i, "").replace(/^name:\s*/i, "").trim();
+            }
+            return String(tag || "");
+        };
+
+        // Search by name OR tag code
+        if (searchQuery) {
+            const q = searchQuery.toLowerCase();
+            result = result.filter((f) => {
+                if (String(f.name || "").toLowerCase().includes(q)) return true;
+                // Match against safely extracted tag codes
+                if (f.tags && f.tags.some((tag) => {
+                    const tagStr = extractTagCode(tag).toLowerCase();
+                    return tagStr.includes(q);
+                })) return true;
+                return false;
+            });
+        }
+        // File type filter — strict extension-based matching
+        if (filters.fileType) {
+            result = result.filter((f) => {
+                const name = f.name || "";
+                const ext = name.includes(".") ? "." + name.split(".").pop()!.toLowerCase() : "";
+
+                switch (filters.fileType) {
+                    case "pdf":
+                        return ext === ".pdf";
+                    case "word":
+                        return ext === ".doc" || ext === ".docx";
+                    case "excel":
+                        return ext === ".xls" || ext === ".xlsx";
+                    case "csv":
+                        return ext === ".csv" || ext === ".tsv";
+                    case "powerpoint":
+                        return ext === ".ppt" || ext === ".pptx";
+                    case "image":
+                        return [".png", ".jpg", ".jpeg", ".jfif", ".gif", ".bmp", ".svg", ".webp", ".tif", ".tiff", ".heic", ".heif"].includes(ext);
+                    case "text":
+                        return ext === ".txt" || ext === ".md" || ext === ".mdx" || ext === ".markdown";
+                    case "json":
+                        return ext === ".json";
+                    case "html":
+                        return ext === ".html" || ext === ".htm" || ext === ".xml";
+                    case "code":
+                        return [".js", ".jsx", ".ts", ".tsx", ".css", ".scss", ".py", ".java", ".c", ".cpp", ".h", ".cs", ".php", ".rb", ".go", ".rs", ".swift", ".kt", ".sql", ".sh", ".bat"].includes(ext);
+                    default:
+                        return false;
+                }
+            });
+        }
+        // Date range filter
+        if (filters.dateRange && filters.dateRange !== "all") {
+            const now = new Date();
+            const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+
+            result = result.filter((f) => {
+                const fileDate = f.createdAt ? new Date(f.createdAt) : null;
+                if (!fileDate || isNaN(fileDate.getTime())) return false;
+
+                const targetTime = fileDate.getTime();
+
+                switch (filters.dateRange) {
+                    case "today": {
+                        return targetTime >= todayStart;
+                    }
+                    case "week": {
+                        const weekAgoStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7).getTime();
+                        return targetTime >= weekAgoStart;
+                    }
+                    case "month": {
+                        const monthAgoStart = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate()).getTime();
+                        return targetTime >= monthAgoStart;
+                    }
+                    default:
+                        return true;
+                }
+            });
+        }
+        return result;
+    }, [files, searchQuery, filters, favorites, currentFolder, sortColumn, sortDirection]);
+
+    // Bug 2 & 3: When sorting inside a subfolder, unify folders + files into a single sorted list.
+    // At root level, keep them separate (folders first) for the system folder display.
+    const { allItems, filteredFolders, filteredFiles } = useMemo(() => {
+        const isInsideFolder = !!currentFolder;
+        const hasSortColumn = !!sortColumn;
+
+        if (isInsideFolder && hasSortColumn) {
+            // Unified sort: merge folders and files, sort together
+            const merged: { item: IFolder | IFolderFile; isFolder: boolean }[] = [
+                ...filteredFoldersRaw.map((f) => ({ item: f as IFolder | IFolderFile, isFolder: true })),
+                ...filteredFilesRaw.map((f) => ({ item: f as IFolder | IFolderFile, isFolder: false })),
+            ];
+            merged.sort((a, b) => unifiedSort(a.item, a.isFolder, b.item, b.isFolder));
+
+            // After unified sort, split back for rendering
+            const sortedFolders: IFolder[] = [];
+            const sortedFiles: IFolderFile[] = [];
+            merged.forEach((entry) => {
+                if (entry.isFolder) sortedFolders.push(entry.item as IFolder);
+                else sortedFiles.push(entry.item as IFolderFile);
+            });
+
+            return { allItems: merged, filteredFolders: sortedFolders, filteredFiles: sortedFiles };
+        }
+
+        // No sort or at root: folders first (sorted among themselves), then files (sorted among themselves)
+        const sortedFolders = [...filteredFoldersRaw].sort((a, b) => unifiedSort(a, true, b, true));
+        const sortedFiles = [...filteredFilesRaw].sort((a, b) => unifiedSort(a, false, b, false));
+
+        const items: { item: IFolder | IFolderFile; isFolder: boolean }[] = [];
+        sortedFolders.forEach((f) => items.push({ item: f, isFolder: true }));
+        sortedFiles.forEach((f) => items.push({ item: f, isFolder: false }));
+        return { allItems: items, filteredFolders: sortedFolders, filteredFiles: sortedFiles };
+    }, [filteredFoldersRaw, filteredFilesRaw, currentFolder, sortColumn, sortDirection, favorites]);
+
+    // ─── Pagination ──────────────────────────────────────────
+    const totalItems = allItems.length;
+    const startIndex = page * rowsPerPage;
+    const endIndex = Math.min(startIndex + rowsPerPage, totalItems);
+
+    // Bug 2 & 3: When unified sorting, paginate from allItems directly
+    const isUnifiedSort = !!currentFolder && !!sortColumn;
+    const paginatedItems = isUnifiedSort ? allItems.slice(startIndex, endIndex) : null;
+    const paginatedFolders = isUnifiedSort
+        ? paginatedItems!.filter(i => i.isFolder).map(i => i.item as IFolder)
+        : filteredFolders.slice(Math.max(0, startIndex), Math.min(filteredFolders.length, endIndex));
+    const paginatedFiles = isUnifiedSort
+        ? paginatedItems!.filter(i => !i.isFolder).map(i => i.item as IFolderFile)
+        : (() => {
+            const filesStart = Math.max(0, startIndex - filteredFolders.length);
+            const filesEnd = Math.max(0, endIndex - filteredFolders.length);
+            return filteredFiles.slice(filesStart, filesEnd);
+        })();
+
+    // Bug 6: Count only top-level user selections (items directly visible in allItems)
+    // Exclude auto-selected child file IDs that are added when selecting a folder
+    const displaySelectionCount = useMemo(() => {
+        return Array.from(selectedIds).filter(id => allItems.some(i => i.item.id === id)).length;
+    }, [selectedIds, allItems]);
+
+    // Reset page when search/filters change
+    useEffect(() => {
+        setPage(0);
+    }, [searchQuery, filters]);
+
+    // ─── Selection Handlers ─────────────────────────────────
+    // Helper: get all file IDs inside a folder RECURSIVELY (for auto-select)
+    const getFilesInFolder = useCallback(
+        (folderId: string): string[] => {
+            const sourceFiles = externalFiles || personalFiles;
+            const isTeamContext = currentFolder?.type === "team";
+            const allFolders = isTeamContext ? teamFolders : personalFolders;
+            const allFiles = isTeamContext ? teamFiles : sourceFiles;
+
+            // Collect all subfolder IDs recursively
+            const collectSubfolderIds = (parentId: string): string[] => {
+                const children = allFolders.filter(f => f.parentId === parentId);
+                let ids: string[] = [];
+                for (const child of children) {
+                    ids.push(child.id);
+                    ids = ids.concat(collectSubfolderIds(child.id));
+                }
+                return ids;
+            };
+
+            const allFolderIds = [folderId, ...collectSubfolderIds(folderId)];
+            return allFiles
+                .filter((f: IFolderFile) => allFolderIds.includes(f.folderId))
+                .map((f: IFolderFile) => f.id);
+        },
+        [externalFiles, personalFiles, teamFiles, personalFolders, teamFolders, currentFolder?.type]
+    );
+
+    // Check if an item is a non-system folder
+    const isNonSystemFolder = useCallback(
+        (id: string): IFolder | null => {
+            const item = allItems.find((i) => i.item.id === id && i.isFolder);
+            if (item) {
+                const folder = item.item as IFolder;
+                if (!folder.isSystemFolder) return folder;
+            }
+            return null;
+        },
+        [allItems]
+    );
+
+    const handleItemClick = useCallback(
+        (e: React.MouseEvent, id: string, index: number) => {
+            if (e.shiftKey && lastClickedIndex !== null) {
+                // Shift+click: range select
+                const anchor = shiftAnchorIndex ?? lastClickedIndex;
+                const start = Math.min(anchor, index);
+                const end = Math.max(anchor, index);
+                const newSelected = new Set<string>();
+                for (let i = start; i <= end; i++) {
+                    newSelected.add(allItems[i].item.id);
+                }
+                setSelectedIds(newSelected);
+            } else if (e.ctrlKey || e.metaKey) {
+                // Ctrl+click: toggle this item
+                const newSelected = new Set(selectedIds);
+                if (newSelected.has(id)) {
+                    newSelected.delete(id);
+                } else {
+                    newSelected.add(id);
+                }
+                setSelectedIds(newSelected);
+                setShiftAnchorIndex(index);
+            } else {
+                // Regular click: toggle if only this item selected, else select it
+                if (selectedIds.has(id)) {
+                    // Deselect item if we click it again directly
+                    const newSelected = new Set(selectedIds);
+                    newSelected.delete(id);
+                    const folder = isNonSystemFolder(id);
+                    if (folder) {
+                        getFilesInFolder(folder.id).forEach((fid) => newSelected.delete(fid));
+                    }
+                    setSelectedIds(newSelected);
+                    setLastClickedIndex(null);
+                    setShiftAnchorIndex(null);
+                    return;
+                }
+                setSelectedIds(new Set([id]));
+                // If this is a non-system folder, also select all its files
+                const folder = isNonSystemFolder(id);
+                if (folder) {
+                    const fileIds = getFilesInFolder(folder.id);
+                    setSelectedIds(new Set([id, ...fileIds]));
+                }
+                setShiftAnchorIndex(index);
+            }
+            setLastClickedIndex(index);
+        },
+        [selectedIds, lastClickedIndex, shiftAnchorIndex, allItems, isNonSystemFolder, getFilesInFolder]
+    );
+
+    const handleCheckboxToggle = useCallback(
+        (id: string) => {
+            const newSelected = new Set(selectedIds);
+            const folder = isNonSystemFolder(id);
+            if (newSelected.has(id)) {
+                newSelected.delete(id);
+                // If this is a non-system folder, also deselect its files
+                if (folder) {
+                    getFilesInFolder(folder.id).forEach((fid) => newSelected.delete(fid));
+                }
+            } else {
+                newSelected.add(id);
+                // If this is a non-system folder, also select its files
+                if (folder) {
+                    getFilesInFolder(folder.id).forEach((fid) => newSelected.add(fid));
+                }
+            }
+            setSelectedIds(newSelected);
+        },
+        [selectedIds, isNonSystemFolder, getFilesInFolder]
+    );
+
+    // ─── Keyboard: Arrow navigation + Shift+Arrow multi-select + Space to Select ──
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            // Spacebar handler to open a file (avoid triggering if typing in an input)
+            if (e.key === " " && document.activeElement?.tagName !== "INPUT" && document.activeElement?.tagName !== "TEXTAREA") {
+                if (selectedIds.size === 1) {
+                    const id = Array.from(selectedIds)[0];
+                    const selectedItemWrap = allItems.find(wrap => wrap.item.id === id);
+                    if (selectedItemWrap && !selectedItemWrap.isFolder) {
+                        e.preventDefault();
+                        onFileOpen?.(selectedItemWrap.item as IFolderFile);
+                    }
+                }
+                return;
+            }
+
+            if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+            if (lastClickedIndex === null || allItems.length === 0) return;
+
+            e.preventDefault();
+
+            const direction = e.key === "ArrowDown" ? 1 : -1;
+            const nextIndex = Math.max(0, Math.min(lastClickedIndex + direction, allItems.length - 1));
+            if (nextIndex === lastClickedIndex) return;
+
+            if (e.shiftKey) {
+                // Shift+Arrow: extend or shrink selection
+                const anchor = shiftAnchorIndex ?? lastClickedIndex;
+                const newSelected = new Set<string>();
+                const start = Math.min(anchor, nextIndex);
+                const end = Math.max(anchor, nextIndex);
+                for (let i = start; i <= end; i++) {
+                    newSelected.add(allItems[i].item.id);
+                }
+                setSelectedIds(newSelected);
+                setLastClickedIndex(nextIndex);
+            } else {
+                // Plain Arrow: move focus to next/prev item (single select)
+                setSelectedIds(new Set([allItems[nextIndex].item.id]));
+                setLastClickedIndex(nextIndex);
+                setShiftAnchorIndex(nextIndex);
+            }
+        };
+
+        window.addEventListener("keydown", handleKeyDown);
+        return () => window.removeEventListener("keydown", handleKeyDown);
+    }, [lastClickedIndex, shiftAnchorIndex, allItems, selectedIds, onFileOpen]);
+
+    // ─── Navigation Handlers ─────────────────────────────────
+    const handleFolderDoubleClick = (folder: IFolder) => {
+        setBreadcrumbs((prev) => [...prev, folder]);
+        setCurrentFolder(folder);
+        setSearchQuery("");
+        setSelectedIds(new Set());
+        setLastClickedIndex(null);
+        setShiftAnchorIndex(null);
+        onFolderSelect?.(folder);
+    };
+
+    // Fix #6: Auto-navigate into Personal folder after upload
+    useEffect(() => {
+        if (onNavigateToPersonal && !currentFolder && filteredFolders.length > 0) {
+            const personalFolder = filteredFolders.find((f: IFolder) => f.id === "personal" || f.name === "Personal");
+            if (personalFolder) {
+                setBreadcrumbs([personalFolder]);
+                setCurrentFolder(personalFolder);
+                onNavigateToPersonal();
+            }
+        }
+    }, [onNavigateToPersonal, filteredFolders]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    const handleBackClick = () => {
+        if (breadcrumbs.length === 0) return;
+        const newBreadcrumbs = [...breadcrumbs];
+        newBreadcrumbs.pop();
+        setBreadcrumbs(newBreadcrumbs);
+        setCurrentFolder(newBreadcrumbs[newBreadcrumbs.length - 1] || null);
+        setSearchQuery("");
+        setSelectedIds(new Set());
+        setLastClickedIndex(null);
+        setShiftAnchorIndex(null);
+    };
+
+    const handleBreadcrumbClick = (index: number) => {
+        if (index === -1) {
+            setBreadcrumbs([]);
+            setCurrentFolder(null);
+        } else {
+            const newBreadcrumbs = breadcrumbs.slice(0, index + 1);
+            setBreadcrumbs(newBreadcrumbs);
+            setCurrentFolder(newBreadcrumbs[index]);
+        }
+        setSearchQuery("");
+        setSelectedIds(new Set());
+        setLastClickedIndex(null);
+        setShiftAnchorIndex(null);
+    };
+
+    const handleFileDoubleClick = (file: IFolderFile) => {
+        onFileSelect?.(file);
+    };
+
+    // Helper: Find all item children (files and subfolders within a folder recursively based on ID/folderId)
+    const getFolderItems = useCallback((folderId: string, isTeam: boolean): (IFolderFile | IFolder)[] => {
+        const fFiles = isTeam ? teamFiles : personalFiles;
+        const fFolders = isTeam ? teamFolders : personalFolders;
+
+        const folderMarker = fFolders.find(f => f.id === folderId);
+        let gsPrefix = folderMarker?.path || folderMarker?.id || folderId;
+
+        // Generate pure Prefix for files (which don't have gs:// protocol)
+        let purePrefix = gsPrefix;
+        if (purePrefix.startsWith("gs://")) {
+            const parts = purePrefix.replace("gs://", "").split("/");
+            parts.shift(); // drop bucket
+            purePrefix = parts.join("/");
+        }
+        if (!purePrefix.endsWith("/")) purePrefix += "/";
+
+        // Generate full GS Prefix for folders (which always use gs:// protocol)
+        if (!gsPrefix.startsWith("gs://")) {
+            gsPrefix = `gs://${SECRET_GCS_FILE_UPLOAD_BUCKET}/${gsPrefix}`;
+        }
+        if (!gsPrefix.endsWith("/")) gsPrefix += "/";
+
+        // Files might use pure prefix or full GS prefix depending on how they were fetched
+        const matchingFiles = fFiles.filter(f => f.folderId === folderId || (f.filePath && f.filePath.startsWith(purePrefix)) || (f.filePath && f.filePath.startsWith(gsPrefix)));
+
+        // Folders use absolute GS string (e.g. "gs://bucket/teamCode/folder/subfolder/")
+        // Important: we include the folder itself via `f.id === folderId`
+        const matchingFolders = fFolders.filter(f => f.parentId === folderId || (f.path && f.path.startsWith(gsPrefix)) || f.id === folderId);
+
+        return [...matchingFiles, ...matchingFolders];
+    }, [personalFiles, personalFolders, teamFiles, teamFolders]);
+
+    // ─── Sync Selection (moved here to access allItems) ──────
+    useEffect(() => {
+        const ids = Array.from(selectedIds);
+        const items = allItems
+            .filter((wrapper) => selectedIds.has(wrapper.item.id))
+            .map((wrapper) => wrapper.item);
+
+        const resolvedFiles: IFolderFile[] = [];
+        const seenIds = new Set<string>();
+        items.forEach(item => {
+            const isFolder = "fileCount" in item || "isSystemFolder" in item;
+            if (isFolder) {
+                const folderType = (item as any).folderType || (item as any).type;
+                const isTeam = folderType === "team" || currentFolder?.type === "team";
+                const itemsInFolder = getFolderItems(item.id, isTeam);
+                itemsInFolder.forEach(f => {
+                    if (!("fileCount" in f) && !("isSystemFolder" in f) && !seenIds.has(f.id)) {
+                        resolvedFiles.push(f as IFolderFile);
+                        seenIds.add(f.id);
+                    }
+                });
+            } else {
+                if (!seenIds.has(item.id)) {
+                    resolvedFiles.push(item as IFolderFile);
+                    seenIds.add(item.id);
+                }
+            }
+        });
+
+        onSelectionChangeRef.current?.(ids, items, resolvedFiles);
+    }, [selectedIds, allItems, currentFolder?.type, getFolderItems]);
+
+    // ─── Favorites ───────────────────────────────────────────
+    const handleFavoriteToggle = useCallback(
+        (id: string) => {
+            if (!user?.sID) return;
+            const newFavorites = new Set(favorites);
+            if (newFavorites.has(id)) {
+                newFavorites.delete(id);
+            } else {
+                newFavorites.add(id);
+            }
+            setFavorites(newFavorites);
+            saveFavorites(user.sID, newFavorites);
+        },
+        [favorites, user?.sID]
+    );
+
+    // ─── Context Menu ────────────────────────────────────────
+    const handleContextMenu = (
+        event: React.MouseEvent,
+        item: IFolder | IFolderFile,
+        isFolder: boolean
+    ) => {
+        event.preventDefault();
+        setContextMenu({
+            mouseX: event.clientX + 2,
+            mouseY: event.clientY - 6,
+            item,
+            isFolder,
+        });
+        // Also select the right-clicked item
+        if (!selectedIds.has(item.id)) {
+            setSelectedIds(new Set([item.id]));
+        }
+    };
+
+    // State to hold target for Rename
+    const [renameTarget, setRenameTarget] = useState<IFolder | IFolderFile | null>(null);
+
+    const handleCloseContextMenu = () => {
+        setContextMenu(null);
+    };
+
+
+
+    // Strict Authoritative Delete Pipeline (Native API execution)
+    const handleLocalDelete = useCallback((item: IFolder | IFolderFile | (IFolder | IFolderFile)[]) => {
+        let itemsArray: (IFolder | IFolderFile)[] = [];
+
+        if (Array.isArray(item)) {
+            item.forEach(i => {
+                const isFolder = "fileCount" in i || "isSystemFolder" in i;
+                if (isFolder) {
+                    const folderType = (i as any).folderType || (i as any).type;
+                    const isTeam = folderType === "team" || currentFolder?.type === "team";
+                    itemsArray = [...itemsArray, i, ...getFolderItems(i.id, isTeam)];
+                } else {
+                    itemsArray.push(i);
+                }
+            });
+        } else {
+            const isFolder = "fileCount" in item || "isSystemFolder" in item;
+            if (isFolder) {
+                const folderType = (item as any).folderType || (item as any).type;
+                const isTeam = folderType === "team" || currentFolder?.type === "team";
+                itemsArray = [item, ...getFolderItems(item.id, isTeam)];
+            } else {
+                itemsArray = [item];
+            }
+        }
+
+        // De-duplicate array
+        const uniqueIds = new Set();
+        const finalItems = itemsArray.filter(i => {
+            if (uniqueIds.has(i.id)) return false;
+            uniqueIds.add(i.id);
+            return true;
+        });
+
+        setItemsToDelete(finalItems);
+        setDeleteConfirmOpen(true);
+    }, [currentFolder?.type, getFolderItems]);
+
+    const handleConfirmDelete = async () => {
+        if (!user || itemsToDelete.length === 0) return;
+        setIsDeleting(true);
+
+        const targetIds = itemsToDelete.map(f => f.id);
+
+        try {
+            const response = await fetch("/api/archiveDocument", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    sID: user.sID,
+                    files: targetIds,
+                }),
+            });
+
+            const data = await response.json();
+
+            if (data?.success) {
+                await refreshAllData();
+                setDeleteConfirmOpen(false);
+                setItemsToDelete([]);
+                setSelectedIds(new Set()); // Clear selection so Delete button and Share count reset
+                if (onDelete) {
+                    // Bubble event if CustomDocumentRenderer needs to clear selected grids.
+                    // Important: `onDelete` historically expected an array or single item to manage its OWN fetching
+                    // If we pass an empty array, it might clear selection but effectively do nothing regarding backend
+                    onDelete([]);
+                }
+            } else {
+                alert(`Failed to delete items: ${data?.message}`);
+            }
+        } catch (error: any) {
+            console.error("Archive exception", error);
+            alert("An error occurred while deleting items.");
+        } finally {
+            setIsDeleting(false);
+        }
+    };
+
+    const handleContextAction = (action: string) => {
+        if (!contextMenu) return;
+        const { item } = contextMenu;
+        handleCloseContextMenu();
+
+        if (action === "download") {
+            // Download disabled — no-op for now
+            return;
+        } else if (action === "rename") {
+            setNewName(item.name);
+            setRenameTarget(item);
+            setRenameDialogOpen(true);
+        } else if (action === "delete") {
+            // Bug 5: When multiple items are selected and the context item is among them,
+            // delete all selected items, not just the context-clicked one
+            if (selectedIds.size > 1 && selectedIds.has(item.id)) {
+                const items = allItems.filter(i => selectedIds.has(i.item.id)).map(i => i.item);
+                handleLocalDelete(items);
+            } else {
+                handleLocalDelete(item);
+            }
+        } else if (action === "move" || action === "copy") {
+            // Gather all selected items (or just the context-clicked item)
+            const itemsToMove = selectedIds.size > 1
+                ? allItems.filter(i => selectedIds.has(i.item.id)).map(i => i.item)
+                : [item];
+            setMoveCopyState({ open: true, mode: action as 'move' | 'copy', items: itemsToMove, isProcessing: false });
+        }
+    };
+
+    const handleRenameConfirm = async () => {
+        if (!renameTarget || !newName.trim() || !user?.sID) return;
+
+        // Block rename if a sibling file/folder already has the same name
+        const trimmedName = newName.trim();
+        const isFolder = "fileCount" in renameTarget || "isSystemFolder" in renameTarget;
+        const siblings = allItems.filter(i => i.item.id !== renameTarget.id);
+        const duplicateExists = siblings.some(i => {
+            const n = i.item.name || '';
+            return n.toLowerCase() === trimmedName.toLowerCase();
+        });
+        if (duplicateExists) {
+            alert(`A ${isFolder ? 'folder' : 'file'} named "${trimmedName}" already exists. Please choose a different name.`);
+            return;
+        }
+
+        setIsRenaming(true);
+        try {
+            let oldPath = renameTarget.id;
+            if (oldPath.startsWith("gs://")) {
+                const pathParts = oldPath.replace("gs://", "").split("/");
+                pathParts.shift(); // remove bucket name
+                oldPath = pathParts.join("/");
+            }
+
+            // Construct new path
+            const oldParts = oldPath.replace(/\/$/, "").split("/");
+            oldParts.pop(); // remove the old name part
+            const isFolder = "fileCount" in renameTarget || "isSystemFolder" in renameTarget;
+
+            let newPath = "";
+            if (oldParts.length > 0) {
+                newPath = oldParts.join("/") + "/" + newName.trim();
+            } else {
+                newPath = newName.trim();
+            }
+
+            if (isFolder) {
+                newPath += "/";
+            }
+
+            const response = await fetch("/api/renameDocument", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    sID: user.sID,
+                    oldPath,
+                    newPath,
+                }),
+            });
+
+            let parseSuccess = false;
+            let parseMessage = "";
+            try {
+                const data = await response.json();
+                parseSuccess = !!(data?.success);
+                parseMessage = data?.message || "";
+            } catch {
+                // If we can't parse the JSON but response was ok, treat as success
+                parseSuccess = response.ok;
+            }
+
+            if (parseSuccess || response.ok) {
+                // Wait for the backend to formally reflect the renamed file in the index
+                await refreshAllData();
+                setRenameDialogOpen(false);
+                setRenameTarget(null);
+                setNewName("");
+                setSelectedIds(new Set());
+                if (onRename) {
+                    onRename(renameTarget, newName);
+                }
+            } else {
+                console.error("Rename failed:", parseMessage);
+                // Silently refresh to get the real state just in case
+                await refreshAllData();
+            }
+            // NOTE: onDataChange is called inside refreshAllData's finally block
+        } catch (error: any) {
+            console.error("Rename exception:", error);
+            // Don't alert — silently refresh to get the real state
+            setTimeout(() => refreshAllData(), 500);
+        } finally {
+            setIsRenaming(false);
+        }
+    };
+
+    // ─── Add Folder ──────────────────────────────────────────
+    const handleAddFolder = () => setShowAddFolderDialog(true);
+
+    const handleCreateFolder = async () => {
+        console.log("[DEBUG handleCreateFolder] Called", { newFolderName, sID: user?.sID, teamCode: user?.teamCode, currentFolder });
+        if (!newFolderName.trim() || !user?.sID) {
+            console.log("[DEBUG handleCreateFolder] Early return — missing name or sID", { name: newFolderName, sID: user?.sID });
+            return;
+        }
+        setIsCreatingFolder(true);
+
+        const isTeamFolder = currentFolder?.type === "team";
+        console.log("[DEBUG handleCreateFolder] isTeamFolder:", isTeamFolder);
+
+        // Determine correct path prefix based on current location
+        let pathPrefix = isTeamFolder ? `${currentFolder?.teamCode || user.teamCode}/` : `${user.sID}/`;
+        if (currentFolder && currentFolder.id !== "personal" && currentFolder.id !== "team") {
+            let cp = currentFolder.path;
+            if (cp.startsWith("gs://")) {
+                const pathParts = cp.replace("gs://", "").split("/");
+                pathParts.shift(); // Drop bucket name
+                cp = pathParts.join("/");
+            }
+            pathPrefix = cp;
+            if (!pathPrefix.endsWith("/")) pathPrefix += "/";
+        }
+        const folderPath = `${pathPrefix}${newFolderName.trim()}/`;
+        console.log("[DEBUG handleCreateFolder] Creating folder at path:", folderPath);
+
+        // --- Strict Backend-Authoritative Folder Generation ---
+
+        setIsCreatingFolder(true);
+        try {
+            const response = await fetch("/api/folder-create", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ sID: user.sID, folderPath, creatorSID: user.sID })
+            });
+
+            const data = await response.json();
+
+            if (data?.success) {
+                // Optimistic UI: instantly insert the new folder into the state
+                const newFolder: IFolder = {
+                    id: `gs://${SECRET_GCS_FILE_UPLOAD_BUCKET}/${folderPath}`,
+                    name: newFolderName.trim(),
+                    type: isTeamFolder ? "team" as const : "personal" as const,
+                    path: folderPath,
+                    ownerSID: user.sID,
+                    creatorSID: user.sID,
+                    createdAt: new Date(),
+                    fileCount: 0,
+                    parentId: currentFolder?.id || "personal",
+                    depth: (currentFolder?.depth ?? 0) + 1,
+                };
+                if (isTeamFolder) {
+                    (newFolder as any).teamCode = currentFolder?.teamCode || user.teamCode;
+                    setTeamFolders(prev => [...prev, newFolder]);
+                } else {
+                    setPersonalFolders(prev => [...prev, newFolder]);
+                }
+
+                setShowAddFolderDialog(false);
+                setNewFolderName("");
+                showNotification("Folder created successfully", { severity: "success" });
+
+                // Delayed re-fetch to sync with GCS
+                setTimeout(() => refreshAllData(), 1500);
+            } else {
+                showNotification(`Failed to create folder: ${data?.message || "Unknown error"}`, { severity: "error" });
+            }
+        } catch (error: any) {
+            console.error("Fatal exception creating folder:", error?.message || error);
+            showNotification(`Error creating folder: ${error?.message || "Internal Network Error"}`, { severity: "error" });
+        } finally {
+            setIsCreatingFolder(false);
+        }
+    };
+
+    // Determine if we are at the root view (no folder selected, no search)
+    const isRootView = !currentFolder && !searchQuery;
+
+    const showAddFolder = Boolean(
+        currentFolder && (currentFolder.depth === undefined || currentFolder.depth < 35) && !isRootView
+    );
+
+    // Determine if context-menu item is owned by current user
+    // For team items, check creatorSID (the user who created/shared it)
+    // For personal items, it is inherently theirs
+    const isContextItemOwned = (() => {
+        if (!contextMenu?.item) return false;
+        const item = contextMenu.item;
+
+        const isTeam = "fileCount" in item
+            ? (item as IFolder).type === "team"
+            : (item as IFolderFile).folderType === "team";
+
+        // If it is a team item, only the creator can edit/delete
+        if (isTeam) {
+            return (item as any).creatorSID === user?.sID;
+        }
+        // Personal items are always owned by the user
+        return true;
+    })();
+
+    // Determine if context-menu item is a system folder (Personal/Team root)
+    const isContextItemSystemFolder =
+        contextMenu?.isFolder &&
+        contextMenu?.item &&
+        "isSystemFolder" in contextMenu.item &&
+        (contextMenu.item as IFolder).isSystemFolder;
+
+    // ─── Render ──────────────────────────────────────────────
+    if (!user || !selectedTeam) {
+        return (
+            <Box sx={{ p: 3, textAlign: "center" }}>
+                <Typography color="text.secondary">
+                    Please ensure you are logged in and have a team selected.
+                </Typography>
+            </Box>
         );
-
-    const handleSubmit = () => {
-        if (!selectedTicker) {
-            setError("Please select a ticker from the dropdown.");
-            return;
-        }
-
-        if (isDuplicate) {
-            setError(`${selectedTicker.code} is already in this watchlist.`);
-            return;
-        }
-
-        onAdd(selectedTicker.code.trim().toUpperCase(), selectedTicker.name, selectedTicker.company_id);
-        setSelectedTicker(null);
-        setError("");
-        onClose();
-    };
-
-    const handleClose = () => {
-        setSelectedTicker(null);
-        setError("");
-        onClose();
-    };
+    }
 
     return (
-        <Dialog
-            open={open}
-            onClose={handleClose}
-            maxWidth="sm"
-            fullWidth
-            PaperProps={{
-                sx: { borderRadius: 2 },
+        <Box
+            sx={{
+                display: "flex",
+                flexDirection: "column",
+                height: "100%",
+                overflow: "hidden",
             }}
         >
-            <DialogTitle sx={{ fontWeight: 600 }}>
-                Add Stock to Watchlist
-            </DialogTitle>
-            <DialogContent>
-                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                    Search for a ticker and select it from the dropdown. The stock
-                    will be added at the bottom of your watchlist.
-                </Typography>
-
-                {error && (
-                    <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError("")}>
-                        {error}
-                    </Alert>
+            {/* Header: Back + Breadcrumbs */}
+            <Box
+                sx={{
+                    display: "flex",
+                    alignItems: "center",
+                    mb: 1,
+                    gap: 2,
+                    px: 1,
+                }}
+            >
+                {currentFolder && (
+                    <Button
+                        variant="text"
+                        startIcon={<ArrowBackIcon />}
+                        onClick={handleBackClick}
+                        size="small"
+                    >
+                        Back
+                    </Button>
                 )}
 
-                <Box display="flex" flexDirection="column" gap={2} mt={1}>
-                    <TickerAutocomplete
-                        options={tickerOptions}
-                        sx={{ width: "100%" }}
-                        fetchOptions={fetchOptions}
-                        value={selectedTicker}
-                        tickerLoadingMessage={tickerLoadingMessage}
-                        showHelperText={isDuplicate}
-                        helperText={isDuplicate ? `${selectedTicker?.code} already exists in this watchlist` : ""}
-                        handleFilterUpdate={(_event, newValue, _reason) => {
-                            setSelectedTicker(newValue);
-                            setError("");
+                <Breadcrumbs
+                    separator={<NavigateNextIcon fontSize="small" />}
+                    sx={{ flex: 1 }}
+                >
+                    <Link
+                        component="button"
+                        underline="hover"
+                        color={currentFolder ? "inherit" : "primary"}
+                        onClick={() => handleBreadcrumbClick(-1)}
+                        sx={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 0.5,
                         }}
-                    />
+                    >
+                        <HomeIcon fontSize="small" />
+                        Documents
+                    </Link>
+                    {breadcrumbs.map((folder, index) => (
+                        <Link
+                            key={folder.id}
+                            component="button"
+                            underline="hover"
+                            color={
+                                index === breadcrumbs.length - 1
+                                    ? "primary"
+                                    : "inherit"
+                            }
+                            onClick={() => handleBreadcrumbClick(index)}
+                        >
+                            {folder.name}
+                        </Link>
+                    ))}
+                </Breadcrumbs>
+            </Box>
 
-                    {selectedTicker && !isDuplicate && (
-                        <Box sx={{ p: 1.5, bgcolor: 'action.hover', borderRadius: 1 }}>
-                            <Typography variant="body2" color="text.secondary">
-                                Company
-                            </Typography>
-                            <Typography variant="body1" fontWeight={500}>
-                                {selectedTicker.name}
-                            </Typography>
-                            {selectedTicker.sector && (
-                                <>
-                                    <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-                                        Sector
-                                    </Typography>
-                                    <Typography variant="body2">
-                                        {selectedTicker.sector}
-                                    </Typography>
-                                </>
-                            )}
-                            {selectedTicker.industry && (
-                                <>
-                                    <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-                                        Industry
-                                    </Typography>
-                                    <Typography variant="body2">
-                                        {selectedTicker.industry}
-                                    </Typography>
-                                </>
-                            )}
+            {/* Search & Filter Bar */}
+            <SearchFilterBar
+                searchQuery={searchQuery}
+                onSearchChange={setSearchQuery}
+                filters={filters}
+                onFilterChange={setFilters}
+                showAddFolder={showAddFolder}
+                onAddFolder={handleAddFolder}
+                placeholder={
+                    currentFolder
+                        ? `Search in ${currentFolder.name}...`
+                        : "Search folders..."
+                }
+                selectedCount={displaySelectionCount}
+                showShareToTeam={currentFolder?.type === "personal"}
+                onShareToTeam={() => setShareDialogOpen(true)}
+                hideTypeFilter={isRootView}
+                showBulkDelete={
+                    !isRootView &&
+                    selectedIds.size > 0 &&
+                    // Bug 4: Only check IDs that are directly visible in allItems
+                    // (auto-selected child file IDs inside selected folders are not in allItems)
+                    Array.from(selectedIds)
+                        .filter((id) => allItems.some(i => i.item.id === id))
+                        .every((id) => {
+                            const itemObj = allItems.find(i => i.item.id === id)?.item;
+                            if (!itemObj) return false;
+                            if ((itemObj as any).isSystemFolder) return false;
+
+                            // Check ownership
+                            const isTeam = "fileCount" in itemObj
+                                ? (itemObj as IFolder).type === "team"
+                                : (itemObj as IFolderFile).folderType === "team";
+
+                            if (isTeam) {
+                                return (itemObj as any).creatorSID === user?.sID;
+                            } else {
+                                // Personal folders and files are inherently owned by the user
+                                return true;
+                            }
+                        }) &&
+                    // Ensure at least one visible item is selected
+                    Array.from(selectedIds).some((id) => allItems.some(i => i.item.id === id))
+                }
+                onBulkDelete={() => {
+                    if (onBulkDeleteClick) {
+                        onBulkDeleteClick();
+                    } else {
+                        // Default behavior if not passed by parent
+                        const items = allItems.filter(i => selectedIds.has(i.item.id)).map(i => i.item);
+                        handleLocalDelete(items);
+                    }
+                }}
+                showBulkDownload={!isRootView && selectedIds.size > 0}
+                onBulkDownload={() => {
+                    const items = allItems.filter(i => selectedIds.has(i.item.id)).map(i => i.item);
+                    onDownload?.(items);
+                }}
+            />
+
+            {/* Table */}
+            <Box className={styles.tableContainer} sx={{ mt: 1 }}>
+                {/* ── Header Row ── */}
+                <Box className={styles.headerRow}>
+                    {!isRootView && (
+                        <Box className={styles.cellCheckbox}>{'\u00A0'}</Box>
+                    )}
+                    <Box className={styles.cellIcon}>{'\u00A0'}</Box>
+                    <Box className={styles.hdrName} onClick={() => {
+                        if (sortColumn === 'name') { setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc'); }
+                        else { setSortColumn('name'); setSortDirection('asc'); }
+                    }}>
+                        Name {sortColumn === 'name' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}
+                    </Box>
+                    <Box className={styles.hdrSharing}>{'\u00A0'}</Box>
+                    {!isRootView && (
+                        <Box className={styles.cellFavorite}>
+                            <StarBorderIcon sx={{ fontSize: 16, color: "#9e9e9e" }} />
                         </Box>
                     )}
+                    <Box className={styles.hdrSize} onClick={() => {
+                        if (sortColumn === 'size') { setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc'); }
+                        else { setSortColumn('size'); setSortDirection('asc'); }
+                    }}>
+                        Size {sortColumn === 'size' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}
+                    </Box>
+                    {!isRootView && (
+                        <Box className={styles.hdrType} onClick={() => {
+                            if (sortColumn === 'type') { setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc'); }
+                            else { setSortColumn('type'); setSortDirection('asc'); }
+                        }}>
+                            Type {sortColumn === 'type' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}
+                        </Box>
+                    )}
+                    <Box className={styles.hdrTags}>
+                        Tags
+                    </Box>
+                    <Box className={styles.hdrDate} onClick={() => {
+                        if (sortColumn === 'date') { setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc'); }
+                        else { setSortColumn('date'); setSortDirection('asc'); }
+                    }}>
+                        Date {sortColumn === 'date' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}
+                    </Box>
+                    <Box className={styles.hdrOwner} onClick={() => {
+                        if (sortColumn === 'owner') { setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc'); }
+                        else { setSortColumn('owner'); setSortDirection('asc'); }
+                    }}>
+                        Owner {sortColumn === 'owner' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}
+                    </Box>
+                    <Box className={styles.cellDelete}>{'\u00A0'}</Box>
                 </Box>
-            </DialogContent>
-            <DialogActions sx={{ px: 3, pb: 2 }}>
-                <Button onClick={handleClose} sx={{ textTransform: "none" }}>
-                    Cancel
-                </Button>
-                <Button
-                    onClick={handleSubmit}
-                    variant="contained"
-                    disabled={!selectedTicker || isDuplicate}
-                    sx={{ textTransform: "none" }}
-                >
-                    Add Stock
-                </Button>
-            </DialogActions>
-        </Dialog>
+
+                {/* ── Body ── */}
+                <Box className={styles.tableBody} ref={tableBodyRef} tabIndex={0}>
+                    {isLoading ? (
+                        <Box
+                            sx={{
+                                display: "flex",
+                                justifyContent: "center",
+                                alignItems: "center",
+                                height: "100%",
+                            }}
+                        >
+                            <CircularProgress />
+                        </Box>
+                    ) : (
+                        <>
+                            {/* Folders */}
+                            {paginatedFolders.map((folder, idx) => (
+                                <FolderItem
+                                    key={folder.id}
+                                    item={folder}
+                                    isFolder={true}
+                                    selected={selectedIds.has(folder.id)}
+                                    checked={selectedIds.has(folder.id)}
+                                    isFavorited={favorites.has(folder.id)}
+                                    folderColor={folderColors[folder.id]}
+                                    hideFavorite={isRootView}
+                                    hideCheckbox={isRootView}
+                                    hideType={isRootView}
+                                    onClick={(e) => {
+                                        if (folder.isSystemFolder) {
+                                            // Single click opens system (root) folders
+                                            handleFolderDoubleClick(folder);
+                                        } else {
+                                            handleItemClick(e, folder.id, startIndex + idx);
+                                        }
+                                    }}
+                                    onDoubleClick={() =>
+                                        handleFolderDoubleClick(folder)
+                                    }
+                                    onContextMenu={(e) =>
+                                        handleContextMenu(e, folder, true)
+                                    }
+                                    onCheckboxChange={() =>
+                                        handleCheckboxToggle(folder.id)
+                                    }
+                                    onFavoriteToggle={() =>
+                                        handleFavoriteToggle(folder.id)
+                                    }
+                                    canDelete={
+                                        // For team folders, only the creator can delete
+                                        // Personal folders are fully owned by the user
+                                        !folder.isSystemFolder && (
+                                            folder.type === "team"
+                                                ? ((folder as any).creatorSID === user?.sID)
+                                                : true
+                                        )
+                                    }
+                                    onDeleteClick={() =>
+                                        handleLocalDelete(folder)
+                                    }
+                                />
+                            ))}
+
+                            {/* Files */}
+                            {paginatedFiles.map((file, idx) => (
+                                <FolderItem
+                                    key={file.id}
+                                    item={file}
+                                    isFolder={false}
+                                    selected={selectedIds.has(file.id)}
+                                    checked={selectedIds.has(file.id)}
+                                    isFavorited={favorites.has(file.id)}
+                                    hideFavorite={isRootView}
+                                    hideCheckbox={isRootView}
+                                    hideType={isRootView}
+                                    onClick={(e) =>
+                                        handleItemClick(
+                                            e,
+                                            file.id,
+                                            startIndex + paginatedFolders.length + idx
+                                        )
+                                    }
+                                    onDoubleClick={() =>
+                                        handleFileDoubleClick(file)
+                                    }
+                                    onContextMenu={(e) =>
+                                        handleContextMenu(e, file, false)
+                                    }
+                                    onCheckboxChange={() =>
+                                        handleCheckboxToggle(file.id)
+                                    }
+                                    onFavoriteToggle={() =>
+                                        handleFavoriteToggle(file.id)
+                                    }
+                                    canDelete={
+                                        // For team files, only the creator (who shared it) can delete
+                                        file.folderType === "team"
+                                            ? ((file as any).creatorSID === user?.sID)
+                                            : true
+                                    }
+                                    onDeleteClick={() =>
+                                        handleLocalDelete(file)
+                                    }
+                                />
+                            ))}
+
+                            {/* Empty state */}
+                            {filteredFolders.length === 0 &&
+                                filteredFiles.length === 0 && (
+                                    <Box className={styles.emptyState}>
+                                        <Typography variant="body1">
+                                            {searchQuery
+                                                ? "No results found"
+                                                : currentFolder
+                                                    ? "This folder is empty"
+                                                    : "No folders found"}
+                                        </Typography>
+                                    </Box>
+                                )}
+                        </>
+                    )}
+                </Box>
+            </Box>
+
+            {/* ── Pagination Footer ── */}
+            <TablePagination
+                component="div"
+                count={totalItems}
+                page={page}
+                onPageChange={(_e: unknown, newPage: number) => setPage(newPage)}
+                rowsPerPage={rowsPerPage}
+                onRowsPerPageChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                    setRowsPerPage(parseInt(e.target.value, 10));
+                    setPage(0);
+                }}
+                rowsPerPageOptions={[10, 20, 50, 100]}
+                sx={{
+                    borderTop: "1px solid #e0e0e0",
+                    minHeight: 40,
+                    overflow: "hidden",
+                    "& .MuiTablePagination-toolbar": {
+                        minHeight: 40,
+                        px: 1,
+                    },
+                    "& .MuiTablePagination-selectLabel, & .MuiTablePagination-displayedRows": {
+                        fontSize: "0.8rem",
+                    },
+                }}
+            />
+
+            {/* ── Context Menu ── */}
+            <Menu
+                open={contextMenu !== null}
+                onClose={handleCloseContextMenu}
+                anchorReference="anchorPosition"
+                anchorPosition={
+                    contextMenu !== null
+                        ? {
+                            top: contextMenu.mouseY,
+                            left: contextMenu.mouseX,
+                        }
+                        : undefined
+                }
+            >
+                {isContextItemOwned && !isContextItemSystemFolder && (
+                    <MenuItem onClick={() => handleContextAction("rename")}>
+                        <ListItemIcon>
+                            <DriveFileRenameOutlineIcon fontSize="small" />
+                        </ListItemIcon>
+                        <ListItemText>Rename</ListItemText>
+                    </MenuItem>
+                )}
+                {/* Download — disabled */}
+
+                {/* Move and Copy */}
+                {isContextItemOwned && !isContextItemSystemFolder && (
+                    <MenuItem onClick={() => handleContextAction("move")}>
+                        <ListItemIcon>
+                            <ReplyIcon sx={{ transform: 'scaleX(-1)' }} fontSize="small" />
+                        </ListItemIcon>
+                        <ListItemText>Move</ListItemText>
+                    </MenuItem>
+                )}
+                {!isContextItemSystemFolder && (
+                    <MenuItem onClick={() => handleContextAction("copy")}>
+                        <ListItemIcon>
+                            <FileCopyIcon fontSize="small" />
+                        </ListItemIcon>
+                        <ListItemText>Copy</ListItemText>
+                    </MenuItem>
+                )}
+
+                {/* Delete — only if current user is the owner and not a system folder */}
+                {isContextItemOwned && !isContextItemSystemFolder && (
+                    <MenuItem
+                        onClick={() => handleContextAction("delete")}
+                        sx={{ color: "error.main" }}
+                    >
+                        <ListItemIcon>
+                            <DeleteIcon fontSize="small" color="error" />
+                        </ListItemIcon>
+                        <ListItemText>Delete</ListItemText>
+                    </MenuItem>
+                )}
+
+                {/* Share to Team — only inside Personal folder */}
+                {currentFolder?.type === "personal" && !isContextItemSystemFolder && (
+                    <MenuItem onClick={() => {
+                        setShareDialogOpen(true);
+                        handleCloseContextMenu();
+                    }}>
+                        <ListItemIcon>
+                            <ShareIcon fontSize="small" />
+                        </ListItemIcon>
+                        <ListItemText>Share to Team</ListItemText>
+                    </MenuItem>
+                )}
+
+                {/* Change Color — only for folders */}
+                {contextMenu?.isFolder && (
+                    <MenuItem onClick={(e) => {
+                        setColorPickerAnchor(e.currentTarget);
+                        setColorPickerFolderId(contextMenu?.item?.id || null);
+                        handleCloseContextMenu();
+                    }}>
+                        <ListItemIcon>
+                            <PaletteIcon fontSize="small" />
+                        </ListItemIcon>
+                        <ListItemText>Change Color</ListItemText>
+                    </MenuItem>
+                )}
+            </Menu>
+
+            {/* ── Color Picker Popover ── */}
+            <Popover
+                open={Boolean(colorPickerAnchor)}
+                anchorEl={colorPickerAnchor}
+                onClose={() => {
+                    setColorPickerAnchor(null);
+                    setColorPickerFolderId(null);
+                }}
+                anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+            >
+                <Box sx={{ p: 1.5, display: "flex", gap: 0.5, flexWrap: "wrap", maxWidth: 180 }}>
+                    {PRESET_FOLDER_COLORS.map((color) => (
+                        <Box
+                            key={color}
+                            onClick={() => {
+                                if (colorPickerFolderId && user?.sID) {
+                                    const updated = { ...folderColors, [colorPickerFolderId]: color };
+                                    setFolderColors(updated);
+                                    saveFolderColors(user.sID, updated);
+                                }
+                                setColorPickerAnchor(null);
+                                setColorPickerFolderId(null);
+                            }}
+                            sx={{
+                                width: 28,
+                                height: 28,
+                                borderRadius: "50%",
+                                backgroundColor: color,
+                                cursor: "pointer",
+                                border: folderColors[colorPickerFolderId || ""] === color
+                                    ? "2px solid #333"
+                                    : "2px solid transparent",
+                                "&:hover": { transform: "scale(1.15)", transition: "transform 0.1s" },
+                            }}
+                        />
+                    ))}
+                </Box>
+            </Popover>
+
+            <MoveCopyDialog
+                open={moveCopyState.open}
+                mode={moveCopyState.mode}
+                personalFolders={personalFolders}
+                teamFolders={teamFolders}
+                activeTeams={(user?.teamCode || "").split(",").map((tc: string) => tc.trim()).filter(Boolean)}
+                userSID={user?.sID || ""}
+                currentFolderId={currentFolder?.id || null}
+                isProcessing={moveCopyState.isProcessing}
+                onClose={() => setMoveCopyState(prev => ({ ...prev, open: false }))}
+                onSubmit={async (destId, destPath) => {
+                    if (moveCopyState.items.length === 0 || !user?.sID) return;
+                    setMoveCopyState(prev => ({ ...prev, isProcessing: true }));
+
+                    try {
+                        // Gather all file paths from the selected items
+                        let payloadIds: string[] = [];
+                        for (const item of moveCopyState.items) {
+                            if ("fileCount" in item) {
+                                // It's a folder — gather all its children
+                                const isTeam = (item as IFolder).type === "team";
+                                const children = getFolderItems(item.id, isTeam);
+                                payloadIds.push(...children.map(i => ("filePath" in i && i.filePath ? i.filePath : i.id)));
+                            } else {
+                                payloadIds.push((item as IFolderFile).filePath || item.id);
+                            }
+                        }
+
+                        const endpoint = moveCopyState.mode === 'move' ? '/api/moveDocument' : '/api/copyDocument';
+                        const res = await fetch(endpoint, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                sID: user.sID,
+                                files: payloadIds,
+                                destinationPath: destPath
+                            })
+                        });
+
+                        const data = await res.json();
+                        if (data.success) {
+                            await refreshAllData();
+                            setMoveCopyState(prev => ({ ...prev, open: false, isProcessing: false, items: [] }));
+                            setSelectedIds(new Set());
+                        } else {
+                            alert(`Failed: ${data.message}`);
+                            setMoveCopyState(prev => ({ ...prev, isProcessing: false }));
+                            await refreshAllData();
+                        }
+                    } catch (e) {
+                        console.error(e);
+                        await refreshAllData();
+                    } finally {
+                        setMoveCopyState(prev => ({ ...prev, isProcessing: false }));
+                    }
+                }}
+            />
+
+            {/* ── Rename Dialog ── */}
+            <Dialog
+                open={renameDialogOpen}
+                onClose={() => setRenameDialogOpen(false)}
+                PaperProps={{ sx: { borderRadius: '16px', minHeight: 180 } }}
+            >
+                <DialogTitle sx={{ fontWeight: 600, fontSize: '1.1rem' }}>Rename</DialogTitle>
+                <DialogContent>
+                    <TextField
+                        autoFocus
+                        margin="dense"
+                        label="New Name"
+                        fullWidth
+                        variant="outlined"
+                        value={newName}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                            setNewName(e.target.value)
+                        }
+                    />
+                </DialogContent>
+                <DialogActions sx={{ px: 3, pb: 2 }}>
+                    <Button onClick={() => setRenameDialogOpen(false)} sx={{ borderRadius: '8px', textTransform: 'none' }}>
+                        Cancel
+                    </Button>
+                    <Button
+                        onClick={handleRenameConfirm}
+                        variant="contained"
+                        disabled={isRenaming || !newName.trim()}
+                        sx={{ borderRadius: '8px', textTransform: 'none', px: 3 }}
+                    >
+                        {isRenaming ? <CircularProgress size={20} color="inherit" /> : "Rename"}
+                    </Button>
+                </DialogActions>
+            </Dialog>
+
+            {/* ── Add Folder Dialog ── */}
+            <Dialog
+                open={showAddFolderDialog}
+                onClose={() => setShowAddFolderDialog(false)}
+                maxWidth="xs"
+                fullWidth
+                PaperProps={{ sx: { borderRadius: '16px', minHeight: 200 } }}
+            >
+                <DialogTitle sx={{ fontWeight: 600, fontSize: '1.1rem' }}>Create New Folder</DialogTitle>
+                <DialogContent>
+                    <TextField
+                        autoFocus
+                        margin="dense"
+                        label="Folder Name"
+                        fullWidth
+                        variant="outlined"
+                        value={newFolderName}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                            setNewFolderName(e.target.value)
+                        }
+                        placeholder="Enter folder name..."
+                    />
+                </DialogContent>
+                <DialogActions sx={{ px: 3, pb: 2 }}>
+                    <Button onClick={() => setShowAddFolderDialog(false)} sx={{ borderRadius: '8px', textTransform: 'none' }}>
+                        Cancel
+                    </Button>
+                    <Button
+                        onClick={handleCreateFolder}
+                        variant="contained"
+                        disabled={!newFolderName.trim() || isCreatingFolder}
+                        sx={{ borderRadius: '8px', textTransform: 'none', px: 3 }}
+                    >
+                        {isCreatingFolder ? (
+                            <CircularProgress size={20} />
+                        ) : (
+                            "Create"
+                        )}
+                    </Button>
+                </DialogActions>
+            </Dialog>
+
+            {/* ── Delete Confirmation Dialog ── */}
+            <Dialog
+                open={deleteConfirmOpen}
+                onClose={() => setDeleteConfirmOpen(false)}
+                maxWidth="xs"
+                fullWidth
+                PaperProps={{ sx: { borderRadius: '16px' } }}
+            >
+                <DialogTitle sx={{ fontWeight: 600, fontSize: '1.1rem' }}>Confirm Delete</DialogTitle>
+                <DialogContent>
+                    <Typography>
+                        Are you sure you want to delete {itemsToDelete.length === 1 ? `"${itemsToDelete[0]?.name}"` : `${itemsToDelete.length} items`}?
+                        Any nested folders and files within will also be fully deleted.
+                    </Typography>
+                </DialogContent>
+                <DialogActions sx={{ px: 3, pb: 2 }}>
+                    <Button onClick={() => setDeleteConfirmOpen(false)} sx={{ borderRadius: '8px', textTransform: 'none' }}>
+                        Cancel
+                    </Button>
+                    <Button
+                        onClick={handleConfirmDelete}
+                        variant="contained"
+                        color="error"
+                        disabled={isDeleting}
+                        sx={{ borderRadius: '8px', textTransform: 'none', px: 3 }}
+                    >
+                        {isDeleting ? <CircularProgress size={20} color="inherit" /> : "Delete"}
+                    </Button>
+                </DialogActions>
+            </Dialog>
+
+            {/* ── Share to Team Dialog ── */}
+            <ShareToTeamDialog
+                open={shareDialogOpen}
+                onClose={() => setShareDialogOpen(false)}
+                teamFolders={teamFolders}
+                selectedCount={displaySelectionCount}
+                onConfirm={async (targetFolderId: string) => {
+                    const selectedItems = allItems
+                        .filter((i) => selectedIds.has(i.item.id))
+                        .map((i) => i.item);
+
+                    // Call share-to-team API
+                    if (user?.sID && user?.teamCode) {
+                        try {
+                            // Separate files from folders
+                            const fileItems = selectedItems.filter(item => 'filePath' in item);
+                            const folderItems = selectedItems.filter(item => 'fileCount' in item || 'isSystemFolder' in item);
+
+                            const fileIds = fileItems.map((item) => {
+                                const f = item as any;
+                                let p = f.filePath || f.id || "";
+                                // Strip gs:// prefix if present
+                                if (p.startsWith("gs://")) {
+                                    const parts = p.replace("gs://", "").split("/");
+                                    parts.shift(); // remove bucket
+                                    p = parts.join("/");
+                                }
+                                return p;
+                            });
+                            const folderIds = folderItems.map((item) => {
+                                const fObj = item as any;
+                                let p = fObj.path || fObj.id || "";
+                                if (p.startsWith("gs://")) {
+                                    const parts = p.replace("gs://", "").split("/");
+                                    parts.shift();
+                                    p = parts.join("/");
+                                }
+                                return p;
+                            });
+
+                            let resolvedTargetFolder = targetFolderId;
+                            const targetFolderObj = teamFolders.find(f => f.id === targetFolderId) || allItems.find(i => i.item.id === targetFolderId)?.item as IFolder;
+                            if (targetFolderObj && targetFolderObj.path) {
+                                // Dynamically extract bucket from gs:// path
+                                const pathStr = targetFolderObj.path;
+                                if (pathStr.startsWith("gs://")) {
+                                    const parts = pathStr.replace("gs://", "").split("/");
+                                    parts.shift(); // remove bucket name
+                                    resolvedTargetFolder = parts.join("/");
+                                } else {
+                                    resolvedTargetFolder = pathStr;
+                                }
+                            } else if (targetFolderId.startsWith("team_")) {
+                                resolvedTargetFolder = targetFolderId.replace("team_", "");
+                            }
+
+
+
+                            const res = await fetch("/api/uploadDocuments/shareToTeam", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                    sID: user.sID,
+                                    teamCode: user.teamCode,
+                                    files: fileIds,
+                                    folders: folderIds,
+                                    targetFolder: resolvedTargetFolder,
+                                }),
+                            });
+                            const data = await res.json();
+                            if (data?.success || res.ok) {
+                                await refreshAllData();
+                            } else {
+                                console.error("Share to team failed:", data?.message);
+                            }
+                        } catch (err) {
+                            console.error("Error sharing to team:", err);
+                        }
+                    }
+
+                    onShareToTeam?.(selectedItems, targetFolderId);
+                    setShareDialogOpen(false);
+                    setSelectedIds(new Set());
+                }}
+            />
+        </Box>
     );
 };
 
-export default AddStockModal;
+export default FolderStructure;
