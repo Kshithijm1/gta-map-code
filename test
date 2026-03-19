@@ -1,57 +1,230 @@
-  const handleGcsFileSelection = async (
-    newSelectionModel: GridRowSelectionModel,
-    resolvedFiles?: any[]
-  ) => {
-    onCustomSelectionChange(newSelectionModel);
+import React, { useState } from 'react';
+import {
+    Dialog,
+    DialogTitle,
+    DialogContent,
+    DialogActions,
+    Button,
+    List,
+    ListItem,
+    ListItemIcon,
+    ListItemText,
+    Typography,
+    Box,
+    ListItemButton,
+    Divider
+} from '@mui/material';
+import FolderIcon from '@mui/icons-material/Folder';
+import HomeIcon from '@mui/icons-material/Home';
+import { IFolder } from '../../interfaces/folderInterfaces';
 
-    const selectedDocs: any[] = [];
-    if (resolvedFiles) {
-      resolvedFiles.forEach((file) => {
-        if (!newSelectionModel.includes(file.id)) return;
-        const existing = customSourceDocuments.find((d) => d.id === file.id);
-        if (existing) {
-          selectedDocs.push(existing);
-        } else {
-          // Fix for Bug 11: Create a synthetic IGCSFile for Team Files so they get processed
-          selectedDocs.push({
-            id: String(file.id),
-            filePath: String(file.id),
-            name: String(file.name),
-            size: Number(file.size || 0),
-            contentType: file.name?.endsWith(".pdf") ? "application/pdf" : "application/octet-stream",
-            tokenCount: "0",
-            updated: new Date(),
-          });
+interface MoveCopyDialogProps {
+    open: boolean;
+    mode: 'move' | 'copy';
+    personalFolders: IFolder[];
+    teamFolders: IFolder[];
+    currentFolderId: string | null;
+    onClose: () => void;
+    onSubmit: (destinationFolderId: string, destinationPath: string) => Promise<void>;
+    isProcessing: boolean;
+    activeTeams: string[];
+    userSID: string;
+    movingItemIds?: string[];
+}
+
+export const MoveCopyDialog: React.FC<MoveCopyDialogProps> = ({
+    open,
+    mode,
+    personalFolders,
+    teamFolders,
+    currentFolderId,
+    onClose,
+    onSubmit,
+    isProcessing,
+    activeTeams,
+    userSID,
+    movingItemIds = []
+}) => {
+    // Generate unified unified tree data
+    // Sort logic
+    const sortFolders = (list: IFolder[]) => [...list]
+        .filter(f => !f.isSystemFolder)
+        .sort((a, b) => {
+            if (a.depth !== b.depth) return (a.depth || 0) - (b.depth || 0);
+            return a.name.localeCompare(b.name);
+        });
+
+    const sortedPersonal = sortFolders(personalFolders);
+    const sortedTeam = sortFolders(teamFolders);
+
+    type NodeRender = {
+        id: string;
+        name: string;
+        path: string;
+        depth: number;
+        isRoot: boolean;
+        isCurrent: boolean;
+    };
+
+    const renderNodes: NodeRender[] = [];
+
+    const isCurrentTeam = currentFolderId?.startsWith('team_') || teamFolders.some(f => f.id === currentFolderId);
+
+    // Identify paths of folders being moved so we don't allow moving them into themselves or their children
+    const skipPrefixes: string[] = [];
+    for (const mId of movingItemIds) {
+        const item = [...personalFolders, ...teamFolders].find(f => f.id === mId);
+        if (item) skipPrefixes.push(item.path);
+    }
+    const shouldSkip = (path: string) => skipPrefixes.some(p => path.startsWith(p));
+
+    // Personal root
+    if (!currentFolderId || !isCurrentTeam) {
+        renderNodes.push({
+            id: 'personal',
+            name: 'Personal Root',
+            path: `${userSID}/`,
+            depth: 0,
+            isRoot: true,
+            isCurrent: currentFolderId === 'personal' && mode === 'move'
+        });
+
+        // Personal subfolders
+        for (const f of sortedPersonal) {
+            if (shouldSkip(f.path)) continue;
+
+            renderNodes.push({
+                id: f.id,
+                name: f.name,
+                path: f.path,
+                depth: f.depth || 1,
+                isRoot: false,
+                isCurrent: f.id === currentFolderId && mode === 'move'
+            });
         }
-      });
-    } else {
-      const docs = customSourceDocuments.filter((doc) =>
-        newSelectionModel.includes(doc.id)
-      );
-      selectedDocs.push(...docs);
     }
 
-    let totalTokenCount = 0;
+    // Team roots and subfolders
+    if (!currentFolderId || isCurrentTeam) {
+        for (const tc of activeTeams) {
+            renderNodes.push({
+                id: `team_${tc}`,
+                name: tc,
+                path: `${tc}/`,
+                depth: 0,
+                isRoot: true,
+                isCurrent: currentFolderId === `team_${tc}` && mode === 'move'
+            });
 
+            // Team subfolders specifically for this teamCode
+            for (const f of sortedTeam.filter(tf => tf.teamCode === tc)) {
+                if (shouldSkip(f.path)) continue;
 
+                renderNodes.push({
+                    id: f.id,
+                    name: f.name,
+                    path: f.path,
+                    depth: f.depth || 1,
+                    isRoot: false,
+                    isCurrent: f.id === currentFolderId && mode === 'move'
+                });
+            }
+        }
+    }
 
+    const [selectedDestinationId, setSelectedDestinationId] = useState<string | null>(null);
 
-
-export const getFormattedUploadedFiles = (
-  ids: GridRowSelectionModel,
-  mappingTable: IGCSFile[]
-) => {
-  return ids.map((id) => {
-    // Attempt to match personal files first for exact contentType
-    const existing = mappingTable.find((row) => row.id === id);
-    const fileUri = String(id);
-    const mimeType = existing?.contentType || (fileUri.toLowerCase().endsWith(".pdf") ? "application/pdf" : "application/octet-stream");
-
-    return {
-      fileData: {
-        fileUri,
-        mimeType,
-      },
+    const handleSelect = (id: string, isCurrent: boolean) => {
+        if (!isCurrent) {
+            setSelectedDestinationId(id);
+        }
     };
-  });
+
+    const handleConfirm = () => {
+        if (!selectedDestinationId) return;
+
+        const destNode = renderNodes.find(r => r.id === selectedDestinationId);
+        if (!destNode) return;
+
+        let destPath = destNode.path.endsWith("/") ? destNode.path : `${destNode.path}/`;
+        if (destPath.startsWith("gs://")) {
+            const parts = destPath.replace("gs://", "").split("/");
+            parts.shift();
+            destPath = parts.join("/");
+        }
+
+        onSubmit(selectedDestinationId, destPath);
+    };
+
+    return (
+        <Dialog open={open} onClose={onClose} PaperProps={{ sx: { borderRadius: '16px', minWidth: 400, minHeight: 400 } }}>
+            <DialogTitle sx={{ fontWeight: 600, fontSize: '1.2rem', pb: 1 }}>
+                {mode === 'move' ? 'Move to' : 'Copy to'}
+            </DialogTitle>
+            <Divider />
+            <DialogContent sx={{ p: 0 }}>
+                <List sx={{ pt: 0 }}>
+                    {renderNodes.map((node) => {
+                        const indent = node.isRoot ? 2 : 2 + (node.depth * 3);
+                        return (
+                            <ListItem key={node.id} disablePadding>
+                                <ListItemButton
+                                    disabled={node.isCurrent}
+                                    selected={selectedDestinationId === node.id}
+                                    onClick={() => handleSelect(node.id, node.isCurrent)}
+                                    sx={{
+                                        pl: indent,
+                                        '&.Mui-selected': { bgcolor: 'rgba(25, 118, 210, 0.08)' }
+                                    }}
+                                >
+                                    <ListItemIcon sx={{ minWidth: 40 }}>
+                                        {node.isRoot ? (
+                                            <HomeIcon sx={{ color: node.isCurrent ? 'text.disabled' : '#1976d2' }} />
+                                        ) : (
+                                            <FolderIcon sx={{ color: node.isCurrent ? 'text.disabled' : '#f0b429' }} />
+                                        )}
+                                    </ListItemIcon>
+                                    <ListItemText
+                                        primary={node.name}
+                                        primaryTypographyProps={{
+                                            fontWeight: selectedDestinationId === node.id ? 600 : 400,
+                                            color: node.isCurrent ? 'text.disabled' : 'text.primary'
+                                        }}
+                                    />
+                                </ListItemButton>
+                            </ListItem>
+                        );
+                    })}
+                </List>
+                {renderNodes.length === 0 && (
+                    <Box sx={{ p: 3, textAlign: 'center' }}>
+                        <Typography color="text.secondary">No folders available.</Typography>
+                    </Box>
+                )}
+            </DialogContent>
+            <Divider />
+            <DialogActions sx={{ p: 2 }}>
+                <Button
+                    onClick={onClose}
+                    sx={{ color: '#666', borderRadius: '8px' }}
+                    disabled={isProcessing}
+                >
+                    Cancel
+                </Button>
+                <Button
+                    variant="contained"
+                    onClick={handleConfirm}
+                    disabled={!selectedDestinationId || selectedDestinationId === currentFolderId || isProcessing}
+                    sx={{
+                        borderRadius: '8px',
+                        textTransform: 'none',
+                        px: 3,
+                        boxShadow: '0 4px 10px rgba(0,0,0,0.1)'
+                    }}
+                >
+                    {isProcessing ? (mode === 'move' ? 'Moving...' : 'Copying...') : (mode === 'move' ? 'Move here' : 'Copy here')}
+                </Button>
+            </DialogActions>
+        </Dialog>
+    );
 };
