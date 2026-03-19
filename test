@@ -1,25 +1,24 @@
-export const getFormattedUploadedFiles = (
-  ids: GridRowSelectionModel,
-  mappingTable: IGCSFile[]
-) => {
-  // Bug 11 Fix: Helper to infer mimeType from file extension for team files not in mappingTable
-  const inferMimeType = (uri: string): string => {
-    const lower = uri.toLowerCase();
-    if (lower.endsWith(".pdf")) return "application/pdf";
-    if (lower.endsWith(".csv")) return "text/csv";
-    if (lower.endsWith(".txt")) return "text/plain";
-    if (lower.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-    if (lower.endsWith(".xlsx")) return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-    if (lower.endsWith(".pptx")) return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
-    if (lower.endsWith(".json")) return "application/json";
-    if (lower.endsWith(".html") || lower.endsWith(".htm")) return "text/html";
-    if (lower.endsWith(".png")) return "image/png";
-    if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
-    return "application/octet-stream";
-  };
-
-  return ids.map((id) => {
-    // Attempt to match personal files first for exact contentType
-    const existing = mappingTable.find((row) => row.id === id);
-    const fileUri = String(id);
-    const mimeType = existing?.contentType || inferMimeType(fileUri);
+                    try {
+                        // Bug 13 Fix: Gather file paths for the move/copy payload.
+                        // For folders, ONLY send the folder path (ending with "/").
+                        // The backend move API handles recursive folder moves natively.
+                        // Sending individual child file paths alongside a folder path
+                        // causes them to be moved twice (once by the folder move, once individually),
+                        // resulting in duplicates and "Some files failed to move" errors.
+                        let payloadIds: string[] = [];
+                        for (const item of moveCopyState.items) {
+                            if ("fileCount" in item) {
+                                // It's a folder — only send the folder's own path
+                                let folderPath = (item as IFolder).path || item.id;
+                                if (!folderPath.endsWith("/")) folderPath += "/";
+                                // Strip gs:// prefix if present — backend works with relative paths
+                                if (folderPath.startsWith("gs://")) {
+                                    const parts = folderPath.replace("gs://", "").split("/");
+                                    parts.shift(); // remove bucket name
+                                    folderPath = parts.join("/");
+                                }
+                                payloadIds.push(folderPath);
+                            } else {
+                                payloadIds.push((item as IFolderFile).filePath || item.id);
+                            }
+                        }
