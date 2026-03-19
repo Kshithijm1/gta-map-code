@@ -1,139 +1,57 @@
-import React from "react";
-import {
-  Typography,
-  IconButton,
-  ListItemText,
-  Box,
-} from "@mui/material";
+  const handleGcsFileSelection = async (
+    newSelectionModel: GridRowSelectionModel,
+    resolvedFiles?: any[]
+  ) => {
+    onCustomSelectionChange(newSelectionModel);
 
-import AddIcon from "@mui/icons-material/Add";
+    const selectedDocs: any[] = [];
+    if (resolvedFiles) {
+      resolvedFiles.forEach((file) => {
+        if (!newSelectionModel.includes(file.id)) return;
+        const existing = customSourceDocuments.find((d) => d.id === file.id);
+        if (existing) {
+          selectedDocs.push(existing);
+        } else {
+          // Fix for Bug 11: Create a synthetic IGCSFile for Team Files so they get processed
+          selectedDocs.push({
+            id: String(file.id),
+            filePath: String(file.id),
+            name: String(file.name),
+            size: Number(file.size || 0),
+            contentType: file.name?.endsWith(".pdf") ? "application/pdf" : "application/octet-stream",
+            tokenCount: "0",
+            updated: new Date(),
+          });
+        }
+      });
+    } else {
+      const docs = customSourceDocuments.filter((doc) =>
+        newSelectionModel.includes(doc.id)
+      );
+      selectedDocs.push(...docs);
+    }
 
-import CloseIcon from "@mui/icons-material/Close";
-import { TickerAutocomplete } from "../TickerAutocomplete";
-import { getFileSize } from "@/lib/utils";
-import { FileWithMetadata, IFileValidation, ILoading, ITickerOptions, ITags } from "@/interface";
-import FileListItemLoading from "./FileListItemLoading";
-import { useTickerOptions } from "@/hooks/useTickerOptions";
-import FileTags from "../FileTags/FileTags";
+    let totalTokenCount = 0;
 
-interface IFileList {
-  file: FileWithMetadata;
-  fileValidation: IFileValidation;
-  index: number;
-  loading: ILoading;
-  onTickerSearchUpdate: (
-    e: React.SyntheticEvent<Element, Event>,
-    a: ITickerOptions | null,
-    b: number
-  ) => void;
-  selectedTickers: ITickerOptions | null;
-  addTag: (rowId: number) => void;
-  handleRemoveFile: (x: number) => void;
-  handleRemoveTag: (tag: ITags & { rowId: number }) => void;
-}
 
-const FileListItem: React.FC<IFileList> = (props) => {
-  const {
-    file,
-    index,
-    fileValidation,
-    loading,
-    handleRemoveFile,
-    selectedTickers,
-    onTickerSearchUpdate,
-    addTag,
-    handleRemoveTag,
-  } = props;
-  const { tickerLoadingMessage, tickerOptions, fetchOptions } =
-    useTickerOptions();
-  return (
-    <Box sx={{ width: "100%" }}>
-      <Box sx={{ display: "flex", alignItems: "center", width: "100%" }}>
-        <ListItemText
-          primary={file.file.name}
-          secondary={getFileSize(file.file.size)}
-          sx={{
-            color: "text.secondary",
-            width: "250px",
-            minWidth: "250px",
-            maxWidth: "250px",
-            "& .MuiListItemText-primary": {
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            },
-          }}
-        />
-        {fileValidation.error && (
-          <ListItemText
-            primary={
-              <Typography color="error">{fileValidation.error}</Typography>
-            }
-          />
-        )}
 
-        {fileValidation.warning && (
-          <ListItemText
-            primary={
-              <Typography variant="caption" color="warning.main" sx={{ fontSize: "0.7rem" }}>
-                {fileValidation.warning}
-              </Typography>
-            }
-          />
-        )}
 
-        <ListItemText
-          sx={{
-            flexShrink: 0,
-            width: "120px",
-            minWidth: "120px",
-            maxWidth: "120px",
-            overflow: "hidden",
-          }}
-          primary={
-            <FileListItemLoading loading={loading} error={fileValidation.error} />
-          }
-        />
 
-        <TickerAutocomplete
-          sx={{ flexShrink: 0, fontSize: "12px", marginRight: "5px", width: "220px", minWidth: "220px", maxWidth: "220px" }}
-          options={tickerOptions}
-          fetchOptions={fetchOptions}
-          value={selectedTickers}
-          tickerLoadingMessage={tickerLoadingMessage}
-          handleFilterUpdate={(e, value) => {
-            onTickerSearchUpdate(e, value, index);
-          }}
-        />
-        <IconButton
-          size="small"
-          aria-label="add"
-          color="primary"
-          onClick={() => {
-            addTag(index);
-          }}
-        >
-          <AddIcon color="primary" />
-        </IconButton>
-        <IconButton
-          size="small"
-          aria-label="remove file"
-          onClick={() => handleRemoveFile(index)}
-          sx={{
-            color: "grey.500",
-            "&:hover": {
-              color: "error.main",
-            },
-          }}
-        >
-          <CloseIcon fontSize="small" />
-        </IconButton>
-      </Box>
-      <Box sx={{ mt: 0.5, ml: -1.5, width: "100%", transform: "scale(0.95)", transformOrigin: "top left", display: "flex", flexWrap: "wrap", gap: 1 }}>
-        <FileTags file={file} handleRemoveTag={handleRemoveTag} chipSx={{ m: 0 }} />
-      </Box>
-    </Box>
-  );
+export const getFormattedUploadedFiles = (
+  ids: GridRowSelectionModel,
+  mappingTable: IGCSFile[]
+) => {
+  return ids.map((id) => {
+    // Attempt to match personal files first for exact contentType
+    const existing = mappingTable.find((row) => row.id === id);
+    const fileUri = String(id);
+    const mimeType = existing?.contentType || (fileUri.toLowerCase().endsWith(".pdf") ? "application/pdf" : "application/octet-stream");
+
+    return {
+      fileData: {
+        fileUri,
+        mimeType,
+      },
+    };
+  });
 };
-
-export default FileListItem;
