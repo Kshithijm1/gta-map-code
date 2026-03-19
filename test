@@ -1,24 +1,49 @@
-                    try {
-                        // Bug 13 Fix: Gather file paths for the move/copy payload.
-                        // For folders, ONLY send the folder path (ending with "/").
-                        // The backend move API handles recursive folder moves natively.
-                        // Sending individual child file paths alongside a folder path
-                        // causes them to be moved twice (once by the folder move, once individually),
-                        // resulting in duplicates and "Some files failed to move" errors.
-                        let payloadIds: string[] = [];
-                        for (const item of moveCopyState.items) {
-                            if ("fileCount" in item) {
-                                // It's a folder — only send the folder's own path
-                                let folderPath = (item as IFolder).path || item.id;
-                                if (!folderPath.endsWith("/")) folderPath += "/";
-                                // Strip gs:// prefix if present — backend works with relative paths
-                                if (folderPath.startsWith("gs://")) {
-                                    const parts = folderPath.replace("gs://", "").split("/");
-                                    parts.shift(); // remove bucket name
-                                    folderPath = parts.join("/");
-                                }
-                                payloadIds.push(folderPath);
-                            } else {
-                                payloadIds.push((item as IFolderFile).filePath || item.id);
-                            }
-                        }
+  const handleGcsFileSelection = async (
+    newSelectionModel: GridRowSelectionModel,
+    resolvedFiles?: any[]
+  ) => {
+    onCustomSelectionChange(newSelectionModel);
+
+    const selectedDocs: any[] = [];
+    if (resolvedFiles) {
+      resolvedFiles.forEach((file) => {
+        if (!newSelectionModel.includes(file.id)) return;
+        const existing = customSourceDocuments.find((d) => d.id === file.id);
+        if (existing) {
+          selectedDocs.push(existing);
+        } else {
+          // Fix for Bug 11: Create a synthetic IGCSFile for Team Files so they get processed
+          // Use file.contentType from GCS metadata (not guessed from extension)
+          selectedDocs.push({
+            id: String(file.id),
+            filePath: String(file.filePath || file.id),
+            name: String(file.name),
+            size: Number(file.size || 0),
+            contentType: file.contentType || "application/octet-stream",
+            tokenCount: "0",
+            updated: new Date(),
+          });
+        }
+      });
+    } else {
+      const docs = customSourceDocuments.filter((doc) =>
+        newSelectionModel.includes(doc.id)
+      );
+      selectedDocs.push(...docs);
+    }
+
+    let totalTokenCount = 0;
+
+    for (const doc of selectedDocs) {
+      let tokenCount = parseInt(doc.tokenCount);
+      if (!tokenCount || tokenCount <= 0) {
+        // Fix for Bug 11: try-catch prevents NaN when countTokens fails for team files
+        try {
+          tokenCount = await countTokens("", {
+            gcsFileUri: doc.id,
+            mimeType: doc.contentType,
+          });
+          if (typeof tokenCount !== "number" || isNaN(tokenCount)) tokenCount = 0;
+        } catch {
+          tokenCount = 0;
+        }
