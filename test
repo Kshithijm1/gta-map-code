@@ -1,38 +1,24 @@
-                            {isUnifiedSort && paginatedItems ? (
-                                paginatedItems.map((entry, idx) => {
-                                    const id = entry.item.id;
-                                    const isFolder = entry.isFolder;
-                                    const canDelete = isFolder
-                                        ? !((entry.item as IFolder).isSystemFolder) && ((entry.item as IFolder).type === "team" ? ((entry.item as any).creatorSID === user?.sID) : true)
-                                        : (entry.item as IFolderFile).folderType === "team" ? ((entry.item as any).creatorSID === user?.sID) : true;
-
-                                    return (
-                                        <FolderItem
-                                            key={id}
-                                            item={entry.item}
-                                            isFolder={isFolder}
-                                            selected={selectedIds.has(id)}
-                                            checked={selectedIds.has(id)}
-                                            isFavorited={favorites.has(id)}
-                                            folderColor={folderColors[id]}
-                                            hideFavorite={isRootView}
-                                            hideCheckbox={isRootView}
-                                            hideType={isRootView}
-                                            onClick={(e) => {
-                                                if (isFolder && (entry.item as IFolder).isSystemFolder) {
-                                                    handleFolderDoubleClick(entry.item as IFolder);
-                                                } else {
-                                                    handleItemClick(e, id, startIndex + idx);
-                                                }
-                                            }}
-                                            onDoubleClick={() => isFolder ? handleFolderDoubleClick(entry.item as IFolder) : handleFileDoubleClick(entry.item as IFolderFile)}
-                                            onContextMenu={(e) => handleContextMenu(e, entry.item, isFolder)}
-                                            onCheckboxChange={() => handleCheckboxToggle(id)}
-                                            onFavoriteToggle={() => handleFavoriteToggle(id)}
-                                            canDelete={canDelete}
-                                            onDeleteClick={() => handleLocalDelete(entry.item)}
-                                        />
-                                    );
-                                })
-                            ) : (
-                                <>
+            } else {
+                // Regular click: toggle this item in the selection (preserves other selections)
+                const newSelected = new Set(selectedIds);
+                if (newSelected.has(id)) {
+                    // Deselect item
+                    newSelected.delete(id);
+                    const folder = isNonSystemFolder(id);
+                    if (folder) {
+                        getFilesInFolder(folder.id).forEach((fid) => newSelected.delete(fid));
+                    }
+                } else {
+                    // Select item
+                    newSelected.add(id);
+                    const folder = isNonSystemFolder(id);
+                    if (folder) {
+                        getFilesInFolder(folder.id).forEach((fid) => newSelected.add(fid));
+                    }
+                }
+                setSelectedIds(newSelected);
+                setShiftAnchorIndex(index);
+            }
+            setLastClickedIndex(index);
+        },
+        [selectedIds, lastClickedIndex, shiftAnchorIndex, allItems, isNonSystemFolder, getFilesInFolder]
