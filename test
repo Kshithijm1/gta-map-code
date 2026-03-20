@@ -1,17 +1,45 @@
-    // Persist selected IDs across remounts (fix #4 and Bug 8 race condition)
-    // IMPORTANT: Initialize synchronously from props. If initialized to [],
-    // FolderStructure will mount with [] and instantly broadcast that empty selection
-    // to the parent, deleting everything before a useEffect could restore it.
-    const [persistedSelectedIds, setPersistedSelectedIds] = useState<string[]>(() => {
-        return Array.isArray(gcsSelectionModel) ? gcsSelectionModel.map(id => String(id)) : [];
-    });
-
-    // Reset persisted selection when modal closes
     useEffect(() => {
-        if (!isOpen) {
-            setPersistedSelectedIds([]);
-        } else {
-            // Restore from global model when reopening (if MUI keepMounted is active)
-            setPersistedSelectedIds(Array.isArray(gcsSelectionModel) ? gcsSelectionModel.map(id => String(id)) : []);
-        }
-    }, [isOpen]);
+        const ids = Array.from(selectedIds);
+
+        // Find ALL selected items across the ENTIRE globally available dataset
+        // so we don't accidentally drop files selected in subfolders when the root folder mounts
+        const allGlobalItems = [
+            ...personalFolders,
+            ...teamFolders,
+            ...personalFiles,
+            ...teamFiles,
+            ...(currentFolder?.type === "team" ? [] : [{ id: "personal", name: "Personal", type: "system", isSystemFolder: true, folderType: "personal" } as unknown as IFolder])
+        ];
+
+        const selectedGlobalItems = allGlobalItems.filter(item => selectedIds.has(item.id));
+
+        const resolvedFiles: IFolderFile[] = [];
+        const seenIds = new Set<string>();
+
+        selectedGlobalItems.forEach(item => {
+            const isFolder = "fileCount" in item || "isSystemFolder" in item;
+            if (isFolder) {
+                const folderType = (item as any).folderType || (item as any).type;
+                const isTeam = folderType === "team" || currentFolder?.type === "team";
+                const itemsInFolder = getFolderItems(item.id, isTeam);
+                itemsInFolder.forEach(f => {
+                    if (!("fileCount" in f) && !("isSystemFolder" in f) && !seenIds.has(f.id)) {
+                        resolvedFiles.push(f as IFolderFile);
+                        seenIds.add(f.id);
+                    }
+                });
+            } else {
+                if (!seenIds.has(item.id)) {
+                    resolvedFiles.push(item as IFolderFile);
+                    seenIds.add(item.id);
+                }
+            }
+        });
+
+        // The locally visible selected items, used for toolbar actions (Delete, Move, etc.)
+        const localItems = allItems
+            .filter((wrapper) => selectedIds.has(wrapper.item.id))
+            .map((wrapper) => wrapper.item);
+
+        onSelectionChangeRef.current?.(ids, localItems, resolvedFiles);
+    }, [selectedIds, allItems, currentFolder?.type, getFolderItems, personalFolders, teamFolders, personalFiles, teamFiles]);
