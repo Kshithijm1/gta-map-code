@@ -1,45 +1,38 @@
-    useEffect(() => {
-        const ids = Array.from(selectedIds);
+                            {isUnifiedSort && paginatedItems ? (
+                                paginatedItems.map((entry, idx) => {
+                                    const id = entry.item.id;
+                                    const isFolder = entry.isFolder;
+                                    const canDelete = isFolder
+                                        ? !((entry.item as IFolder).isSystemFolder) && ((entry.item as IFolder).type === "team" ? ((entry.item as any).creatorSID === user?.sID) : true)
+                                        : (entry.item as IFolderFile).folderType === "team" ? ((entry.item as any).creatorSID === user?.sID) : true;
 
-        // Find ALL selected items across the ENTIRE globally available dataset
-        // so we don't accidentally drop files selected in subfolders when the root folder mounts
-        const allGlobalItems = [
-            ...personalFolders,
-            ...teamFolders,
-            ...personalFiles,
-            ...teamFiles,
-            ...(currentFolder?.type === "team" ? [] : [{ id: "personal", name: "Personal", type: "system", isSystemFolder: true, folderType: "personal" } as unknown as IFolder])
-        ];
-
-        const selectedGlobalItems = allGlobalItems.filter(item => selectedIds.has(item.id));
-
-        const resolvedFiles: IFolderFile[] = [];
-        const seenIds = new Set<string>();
-
-        selectedGlobalItems.forEach(item => {
-            const isFolder = "fileCount" in item || "isSystemFolder" in item;
-            if (isFolder) {
-                const folderType = (item as any).folderType || (item as any).type;
-                const isTeam = folderType === "team" || currentFolder?.type === "team";
-                const itemsInFolder = getFolderItems(item.id, isTeam);
-                itemsInFolder.forEach(f => {
-                    if (!("fileCount" in f) && !("isSystemFolder" in f) && !seenIds.has(f.id)) {
-                        resolvedFiles.push(f as IFolderFile);
-                        seenIds.add(f.id);
-                    }
-                });
-            } else {
-                if (!seenIds.has(item.id)) {
-                    resolvedFiles.push(item as IFolderFile);
-                    seenIds.add(item.id);
-                }
-            }
-        });
-
-        // The locally visible selected items, used for toolbar actions (Delete, Move, etc.)
-        const localItems = allItems
-            .filter((wrapper) => selectedIds.has(wrapper.item.id))
-            .map((wrapper) => wrapper.item);
-
-        onSelectionChangeRef.current?.(ids, localItems, resolvedFiles);
-    }, [selectedIds, allItems, currentFolder?.type, getFolderItems, personalFolders, teamFolders, personalFiles, teamFiles]);
+                                    return (
+                                        <FolderItem
+                                            key={id}
+                                            item={entry.item}
+                                            isFolder={isFolder}
+                                            selected={selectedIds.has(id)}
+                                            checked={selectedIds.has(id)}
+                                            isFavorited={favorites.has(id)}
+                                            folderColor={folderColors[id]}
+                                            hideFavorite={isRootView}
+                                            hideCheckbox={isRootView}
+                                            hideType={isRootView}
+                                            onClick={(e) => {
+                                                if (isFolder && (entry.item as IFolder).isSystemFolder) {
+                                                    handleFolderDoubleClick(entry.item as IFolder);
+                                                } else {
+                                                    handleItemClick(e, id, startIndex + idx);
+                                                }
+                                            }}
+                                            onDoubleClick={() => isFolder ? handleFolderDoubleClick(entry.item as IFolder) : handleFileDoubleClick(entry.item as IFolderFile)}
+                                            onContextMenu={(e) => handleContextMenu(e, entry.item, isFolder)}
+                                            onCheckboxChange={() => handleCheckboxToggle(id)}
+                                            onFavoriteToggle={() => handleFavoriteToggle(id)}
+                                            canDelete={canDelete}
+                                            onDeleteClick={() => handleLocalDelete(entry.item)}
+                                        />
+                                    );
+                                })
+                            ) : (
+                                <>
