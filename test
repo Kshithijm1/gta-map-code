@@ -1,11 +1,24 @@
-                                            onDoubleClick={() => {
-                                                if (isFolder) {
-                                                    if (folderClickTimerRef.current) {
-                                                        clearTimeout(folderClickTimerRef.current);
-                                                        folderClickTimerRef.current = null;
-                                                    }
-                                                    handleFolderDoubleClick(entry.item as IFolder);
+                                            hideType={isRootView}
+                                            onClick={(e) => {
+                                                if (folder.isSystemFolder) {
+                                                    // Single click opens system (root) folders
+                                                    handleFolderDoubleClick(folder);
                                                 } else {
-                                                    handleFileDoubleClick(entry.item as IFolderFile);
+                                                    // Delay selection for non-system folders so double-click
+                                                    // (navigation) can cancel it without corrupting selection
+                                                    if (folderClickTimerRef.current) clearTimeout(folderClickTimerRef.current);
+                                                    const clickEvent = { shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey } as React.MouseEvent;
+                                                    const itemIdx = startIndex + idx;
+                                                    folderClickTimerRef.current = setTimeout(() => {
+                                                        handleItemClick(clickEvent, folder.id, itemIdx);
+                                                        folderClickTimerRef.current = null;
+                                                    }, 250);
                                                 }
+                                            }}
+                                            onDoubleClick={() => {
+                                                if (folderClickTimerRef.current) {
+                                                    clearTimeout(folderClickTimerRef.current);
+                                                    folderClickTimerRef.current = null;
+                                                }
+                                                handleFolderDoubleClick(folder);
                                             }}
