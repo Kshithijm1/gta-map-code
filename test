@@ -1,24 +1,17 @@
-            } else {
-                // Regular click: toggle this item in the selection (preserves other selections)
-                const newSelected = new Set(selectedIds);
-                if (newSelected.has(id)) {
-                    // Deselect item
-                    newSelected.delete(id);
-                    const folder = isNonSystemFolder(id);
-                    if (folder) {
-                        getFilesInFolder(folder.id).forEach((fid) => newSelected.delete(fid));
-                    }
-                } else {
-                    // Select item
-                    newSelected.add(id);
-                    const folder = isNonSystemFolder(id);
-                    if (folder) {
-                        getFilesInFolder(folder.id).forEach((fid) => newSelected.add(fid));
-                    }
-                }
-                setSelectedIds(newSelected);
-                setShiftAnchorIndex(index);
-            }
-            setLastClickedIndex(index);
-        },
-        [selectedIds, lastClickedIndex, shiftAnchorIndex, allItems, isNonSystemFolder, getFilesInFolder]
+                                            onClick={(e) => {
+                                                if (isFolder && (entry.item as IFolder).isSystemFolder) {
+                                                    handleFolderDoubleClick(entry.item as IFolder);
+                                                } else if (isFolder) {
+                                                    // Delay selection for non-system folders so double-click
+                                                    // (navigation) can cancel it without corrupting selection
+                                                    if (folderClickTimerRef.current) clearTimeout(folderClickTimerRef.current);
+                                                    const clickEvent = { shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey } as React.MouseEvent;
+                                                    const itemIdx = startIndex + idx;
+                                                    folderClickTimerRef.current = setTimeout(() => {
+                                                        handleItemClick(clickEvent, id, itemIdx);
+                                                        folderClickTimerRef.current = null;
+                                                    }, 250);
+                                                } else {
+                                                    handleItemClick(e, id, startIndex + idx);
+                                                }
+                                            }}
