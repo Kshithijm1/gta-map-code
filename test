@@ -1,7 +1,17 @@
+    // Persist selected IDs across remounts (fix #4 and Bug 8 race condition)
+    // IMPORTANT: Initialize synchronously from props. If initialized to [],
+    // FolderStructure will mount with [] and instantly broadcast that empty selection
+    // to the parent, deleting everything before a useEffect could restore it.
+    const [persistedSelectedIds, setPersistedSelectedIds] = useState<string[]>(() => {
+        return Array.isArray(gcsSelectionModel) ? gcsSelectionModel.map(id => String(id)) : [];
+    });
+
+    // Reset persisted selection when modal closes
     useEffect(() => {
-        if (isOpen && gcsSelectionModel) {
-            setPersistedSelectedIds(Array.isArray(gcsSelectionModel) ? gcsSelectionModel.map(id => String(id)) : []);
-        } else if (!isOpen) {
+        if (!isOpen) {
             setPersistedSelectedIds([]);
+        } else {
+            // Restore from global model when reopening (if MUI keepMounted is active)
+            setPersistedSelectedIds(Array.isArray(gcsSelectionModel) ? gcsSelectionModel.map(id => String(id)) : []);
         }
-    }, [isOpen, gcsSelectionModel]);
+    }, [isOpen]);
