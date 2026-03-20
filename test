@@ -1,49 +1,7 @@
-  const handleGcsFileSelection = async (
-    newSelectionModel: GridRowSelectionModel,
-    resolvedFiles?: any[]
-  ) => {
-    onCustomSelectionChange(newSelectionModel);
-
-    const selectedDocs: any[] = [];
-    if (resolvedFiles) {
-      resolvedFiles.forEach((file) => {
-        if (!newSelectionModel.includes(file.id)) return;
-        const existing = customSourceDocuments.find((d) => d.id === file.id);
-        if (existing) {
-          selectedDocs.push(existing);
-        } else {
-          // Fix for Bug 11: Create a synthetic IGCSFile for Team Files so they get processed
-          // Use file.contentType from GCS metadata (not guessed from extension)
-          selectedDocs.push({
-            id: String(file.id),
-            filePath: String(file.filePath || file.id),
-            name: String(file.name),
-            size: Number(file.size || 0),
-            contentType: file.contentType || "application/octet-stream",
-            tokenCount: "0",
-            updated: new Date(),
-          });
+    useEffect(() => {
+        if (isOpen && gcsSelectionModel) {
+            setPersistedSelectedIds(Array.isArray(gcsSelectionModel) ? gcsSelectionModel.map(id => String(id)) : []);
+        } else if (!isOpen) {
+            setPersistedSelectedIds([]);
         }
-      });
-    } else {
-      const docs = customSourceDocuments.filter((doc) =>
-        newSelectionModel.includes(doc.id)
-      );
-      selectedDocs.push(...docs);
-    }
-
-    let totalTokenCount = 0;
-
-    for (const doc of selectedDocs) {
-      let tokenCount = parseInt(doc.tokenCount);
-      if (!tokenCount || tokenCount <= 0) {
-        // Fix for Bug 11: try-catch prevents NaN when countTokens fails for team files
-        try {
-          tokenCount = await countTokens("", {
-            gcsFileUri: doc.id,
-            mimeType: doc.contentType,
-          });
-          if (typeof tokenCount !== "number" || isNaN(tokenCount)) tokenCount = 0;
-        } catch {
-          tokenCount = 0;
-        }
+    }, [isOpen, gcsSelectionModel]);
