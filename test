@@ -11,13 +11,15 @@ import {
     Typography,
     Box,
     Collapse,
+    CircularProgress,
 } from '@mui/material';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
-import DriveFileMoveIcon from '@mui/icons-material/DriveFileMove';
-import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
-import HomeIcon from '@mui/icons-material/Home';
+import DriveFileMoveIcon from '@mui/icons-material/DriveFileMove';
+import FileCopyIcon from '@mui/icons-material/FileCopy';
+import PersonIcon from '@mui/icons-material/Person';
+import GroupsIcon from '@mui/icons-material/Groups';
 import { IFolder } from '../../interfaces/folderInterfaces';
 
 interface MoveCopyDialogProps {
@@ -34,112 +36,120 @@ interface MoveCopyDialogProps {
     movingItemIds?: string[];
 }
 
-/* ── Types ──────────────────────────────────────────── */
+// ─── Tree helpers ────────────────────────────────────────────
 
-type NodeRender = {
+interface TreeNode {
     id: string;
     name: string;
     path: string;
-    depth: number;
-    isRoot: boolean;
     isCurrent: boolean;
-};
-
-interface TreeNode {
-    node: NodeRender;
+    isDisabled: boolean;
     children: TreeNode[];
 }
 
-/* ── Helpers ────────────────────────────────────────── */
-
 const getDisplayName = (name: string) => {
-    const clean = name.replace(/\/$/, '');
-    const parts = clean.split('/');
+    const clean = name.replace(/\/$/, "");
+    const parts = clean.split("/");
     return parts[parts.length - 1];
 };
 
 /**
- * Convert the flat renderNodes list (with depth) into a proper tree.
- * Relies on the nodes being in parent-before-child order.
+ * Build a tree from a flat folder list, filtering out system folders
+ * and folders that should be skipped (self-move prevention).
  */
-const buildTreeFromFlat = (nodes: NodeRender[]): TreeNode[] => {
+const buildTree = (
+    folders: IFolder[],
+    rootId: string,
+    skipPrefixes: string[],
+    currentFolderId: string | null,
+    isMove: boolean,
+): TreeNode[] => {
+    const shouldSkip = (path: string) => skipPrefixes.some(p => path.startsWith(p));
+
+    const filtered = folders
+        .filter(f => !f.isSystemFolder && !shouldSkip(f.path))
+        .sort((a, b) => a.name.localeCompare(b.name));
+
+    const map = new Map<string, TreeNode>();
     const roots: TreeNode[] = [];
-    const stack: TreeNode[] = [];
 
-    for (const n of nodes) {
-        const treeNode: TreeNode = { node: n, children: [] };
+    // Create nodes
+    filtered.forEach(f => {
+        map.set(f.id, {
+            id: f.id,
+            name: getDisplayName(f.name),
+            path: f.path,
+            isCurrent: f.id === currentFolderId && isMove,
+            isDisabled: f.id === currentFolderId && isMove,
+            children: [],
+        });
+    });
 
-        // Pop the stack until the top is a valid parent (depth < current)
-        while (stack.length > 0 && stack[stack.length - 1].node.depth >= n.depth) {
-            stack.pop();
-        }
-
-        if (stack.length === 0) {
-            roots.push(treeNode);
+    // Assign children
+    filtered.forEach(f => {
+        const node = map.get(f.id)!;
+        if (f.parentId && map.has(f.parentId)) {
+            map.get(f.parentId)!.children.push(node);
+        } else if (f.parentId === rootId || !f.parentId) {
+            roots.push(node);
         } else {
-            stack[stack.length - 1].children.push(treeNode);
+            // Parent was skipped or doesn't exist — treat as root
+            roots.push(node);
         }
-        stack.push(treeNode);
-    }
+    });
 
     return roots;
 };
 
-/* ── Recursive tree item ────────────────────────────── */
+// ─── FolderTreeItem (recursive) ─────────────────────────────
 
 const FolderTreeItem: React.FC<{
-    treeNode: TreeNode;
+    node: TreeNode;
     selectedId: string | null;
-    onSelect: (id: string, isCurrent: boolean) => void;
+    onSelect: (id: string) => void;
     depth: number;
-}> = ({ treeNode, selectedId, onSelect, depth }) => {
-    const [expanded, setExpanded] = useState(true);
-    const { node } = treeNode;
-    const hasChildren = treeNode.children.length > 0;
+}> = ({ node, selectedId, onSelect, depth }) => {
+    const [expanded, setExpanded] = useState(false);
+    const hasChildren = node.children.length > 0;
     const isSelected = selectedId === node.id;
-    const isDisabled = node.isCurrent;
 
     return (
         <>
             <ListItemButton
-                disabled={isDisabled}
                 selected={isSelected}
-                onClick={() => onSelect(node.id, node.isCurrent)}
+                disabled={node.isDisabled}
+                onClick={() => !node.isDisabled && onSelect(node.id)}
                 sx={{
                     pl: 2 + depth * 2.5,
                     py: 1,
-                    borderRadius: '10px',
+                    borderRadius: "10px",
                     mx: 0.75,
                     mb: 0.5,
-                    transition: 'all 0.15s ease',
-                    '&.Mui-selected': {
-                        backgroundColor: 'rgba(25, 118, 210, 0.08)',
-                        border: '1px solid rgba(25, 118, 210, 0.3)',
+                    transition: "all 0.15s ease",
+                    "&.Mui-selected": {
+                        backgroundColor: "rgba(25, 118, 210, 0.08)",
+                        border: "1px solid rgba(25, 118, 210, 0.3)",
                     },
-                    '&.Mui-selected:hover': {
-                        backgroundColor: 'rgba(25, 118, 210, 0.14)',
+                    "&.Mui-selected:hover": {
+                        backgroundColor: "rgba(25, 118, 210, 0.14)",
                     },
-                    '&:hover': {
-                        backgroundColor: 'rgba(0, 0, 0, 0.03)',
-                    },
-                    '&.Mui-disabled': {
-                        opacity: 0.45,
+                    "&:hover": {
+                        backgroundColor: "rgba(0, 0, 0, 0.03)",
                     },
                 }}
             >
-                {/* Expand / collapse chevron */}
                 {hasChildren ? (
                     <ListItemIcon
-                        sx={{ minWidth: 28, cursor: 'pointer' }}
+                        sx={{ minWidth: 28, cursor: "pointer" }}
                         onClick={(e: React.MouseEvent) => {
                             e.stopPropagation();
                             setExpanded(!expanded);
                         }}
                     >
                         {expanded ? (
-                            <ExpandMoreIcon fontSize="small" sx={{ color: '#666' }} />
+                            <ExpandMoreIcon fontSize="small" sx={{ color: "#666" }} />
                         ) : (
-                            <ChevronRightIcon fontSize="small" sx={{ color: '#666' }} />
+                            <ChevronRightIcon fontSize="small" sx={{ color: "#666" }} />
                         )}
                     </ListItemIcon>
                 ) : (
@@ -147,58 +157,53 @@ const FolderTreeItem: React.FC<{
                         <Box sx={{ width: 20 }} />
                     </ListItemIcon>
                 )}
-
-                {/* Folder icon badge */}
                 <ListItemIcon sx={{ minWidth: 36 }}>
                     <Box
                         sx={{
                             width: 30,
                             height: 30,
-                            borderRadius: '8px',
+                            borderRadius: "8px",
                             backgroundColor: isSelected
-                                ? 'rgba(25, 118, 210, 0.12)'
-                                : node.isRoot
-                                    ? 'rgba(66, 165, 245, 0.12)'
-                                    : 'rgba(255, 167, 38, 0.12)',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
+                                ? "rgba(25, 118, 210, 0.12)"
+                                : node.isDisabled
+                                    ? "rgba(0, 0, 0, 0.06)"
+                                    : "rgba(255, 167, 38, 0.12)",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
                         }}
                     >
-                        {node.isRoot ? (
-                            <HomeIcon
-                                sx={{
-                                    fontSize: 18,
-                                    color: isSelected ? '#1976d2' : '#42a5f5',
-                                }}
-                            />
-                        ) : (
-                            <FolderOpenIcon
-                                sx={{
-                                    fontSize: 18,
-                                    color: isSelected ? '#1976d2' : '#ffa726',
-                                }}
-                            />
-                        )}
+                        <FolderOpenIcon
+                            sx={{
+                                fontSize: 18,
+                                color: isSelected
+                                    ? "#1976d2"
+                                    : node.isDisabled
+                                        ? "#bdbdbd"
+                                        : "#ffa726",
+                            }}
+                        />
                     </Box>
                 </ListItemIcon>
-
                 <ListItemText
-                    primary={getDisplayName(node.name)}
+                    primary={node.name}
+                    secondary={node.isCurrent ? "(current)" : undefined}
                     primaryTypographyProps={{
-                        fontSize: '0.875rem',
+                        fontSize: "0.875rem",
                         fontWeight: isSelected ? 600 : 400,
-                        color: isSelected ? '#1976d2' : 'inherit',
+                        color: isSelected ? "#1976d2" : node.isDisabled ? "#bdbdbd" : "inherit",
+                    }}
+                    secondaryTypographyProps={{
+                        fontSize: "0.75rem",
                     }}
                 />
             </ListItemButton>
-
             {hasChildren && (
                 <Collapse in={expanded}>
-                    {treeNode.children.map((child) => (
+                    {node.children.map((child) => (
                         <FolderTreeItem
-                            key={child.node.id}
-                            treeNode={child}
+                            key={child.id}
+                            node={child}
                             selectedId={selectedId}
                             onSelect={onSelect}
                             depth={depth + 1}
@@ -210,7 +215,111 @@ const FolderTreeItem: React.FC<{
     );
 };
 
-/* ── Main dialog ────────────────────────────────────── */
+// ─── RootSection (Personal / Team) ──────────────────────────
+
+const RootSection: React.FC<{
+    id: string;
+    label: string;
+    icon: React.ReactNode;
+    tree: TreeNode[];
+    selectedId: string | null;
+    onSelect: (id: string) => void;
+    isCurrent: boolean;
+}> = ({ id, label, icon, tree, selectedId, onSelect, isCurrent }) => {
+    const [expanded, setExpanded] = useState(true);
+    const isSelected = selectedId === id;
+    const hasChildren = tree.length > 0;
+
+    return (
+        <>
+            <ListItemButton
+                selected={isSelected}
+                disabled={isCurrent}
+                onClick={() => !isCurrent && onSelect(id)}
+                sx={{
+                    pl: 2,
+                    py: 1.25,
+                    borderRadius: "10px",
+                    mx: 0.75,
+                    mb: 0.5,
+                    transition: "all 0.15s ease",
+                    "&.Mui-selected": {
+                        backgroundColor: "rgba(25, 118, 210, 0.08)",
+                        border: "1px solid rgba(25, 118, 210, 0.3)",
+                    },
+                    "&.Mui-selected:hover": {
+                        backgroundColor: "rgba(25, 118, 210, 0.14)",
+                    },
+                    "&:hover": {
+                        backgroundColor: "rgba(0, 0, 0, 0.03)",
+                    },
+                }}
+            >
+                {hasChildren ? (
+                    <ListItemIcon
+                        sx={{ minWidth: 28, cursor: "pointer" }}
+                        onClick={(e: React.MouseEvent) => {
+                            e.stopPropagation();
+                            setExpanded(!expanded);
+                        }}
+                    >
+                        {expanded ? (
+                            <ExpandMoreIcon fontSize="small" sx={{ color: "#666" }} />
+                        ) : (
+                            <ChevronRightIcon fontSize="small" sx={{ color: "#666" }} />
+                        )}
+                    </ListItemIcon>
+                ) : (
+                    <ListItemIcon sx={{ minWidth: 28 }}>
+                        <Box sx={{ width: 20 }} />
+                    </ListItemIcon>
+                )}
+                <ListItemIcon sx={{ minWidth: 36 }}>
+                    <Box
+                        sx={{
+                            width: 30,
+                            height: 30,
+                            borderRadius: "8px",
+                            backgroundColor: isSelected ? "rgba(25, 118, 210, 0.12)" : "rgba(25, 118, 210, 0.08)",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                        }}
+                    >
+                        {icon}
+                    </Box>
+                </ListItemIcon>
+                <ListItemText
+                    primary={label}
+                    secondary={isCurrent ? "(current)" : undefined}
+                    primaryTypographyProps={{
+                        fontSize: "0.9rem",
+                        fontWeight: isSelected ? 700 : 600,
+                        color: isSelected ? "#1976d2" : isCurrent ? "#bdbdbd" : "inherit",
+                    }}
+                    secondaryTypographyProps={{
+                        fontSize: "0.75rem",
+                    }}
+                />
+            </ListItemButton>
+            {hasChildren && (
+                <Collapse in={expanded}>
+                    {tree.map((node) => (
+                        <FolderTreeItem
+                            key={node.id}
+                            node={node}
+                            selectedId={selectedId}
+                            onSelect={onSelect}
+                            depth={1}
+                        />
+                    ))}
+                </Collapse>
+            )}
+        </>
+    );
+};
+
+// ─── Main Dialog ────────────────────────────────────────────
 
 export const MoveCopyDialog: React.FC<MoveCopyDialogProps> = ({
     open,
@@ -223,109 +332,50 @@ export const MoveCopyDialog: React.FC<MoveCopyDialogProps> = ({
     isProcessing,
     activeTeams,
     userSID,
-    movingItemIds = [],
+    movingItemIds = []
 }) => {
     const [selectedDestinationId, setSelectedDestinationId] = useState<string | null>(null);
 
-    /* ─────────────────────────────────────────────────────
-     * DATA LOGIC — identical to the original MoveCopyDialog
-     * ───────────────────────────────────────────────────── */
-
-    const sortFolders = (list: IFolder[]) => [...list]
-        .filter(f => !f.isSystemFolder)
-        .sort((a, b) => {
-            if (a.depth !== b.depth) return (a.depth || 0) - (b.depth || 0);
-            return a.name.localeCompare(b.name);
-        });
-
-    const sortedPersonal = sortFolders(personalFolders);
-    const sortedTeam = sortFolders(teamFolders);
-
-    const renderNodes: NodeRender[] = [];
-
-    const isCurrentTeam = currentFolderId?.startsWith('team_') || teamFolders.some(f => f.id === currentFolderId);
-
-    // Identify paths of folders being moved so we don't allow moving them into themselves or their children
+    // Identify paths of folders being moved so we don't allow moving into themselves
     const skipPrefixes: string[] = [];
     for (const mId of movingItemIds) {
         const item = [...personalFolders, ...teamFolders].find(f => f.id === mId);
         if (item) skipPrefixes.push(item.path);
     }
-    const shouldSkip = (path: string) => skipPrefixes.some(p => path.startsWith(p));
 
-    // Personal root
-    if (!currentFolderId || !isCurrentTeam) {
-        renderNodes.push({
-            id: 'personal',
-            name: 'Personal Root',
-            path: `${userSID}/`,
-            depth: 0,
-            isRoot: true,
-            isCurrent: currentFolderId === 'personal' && mode === 'move'
-        });
+    const isMove = mode === 'move';
+    const isCurrentTeam = currentFolderId?.startsWith('team_') || teamFolders.some(f => f.id === currentFolderId);
 
-        // Personal subfolders
-        for (const f of sortedPersonal) {
-            if (shouldSkip(f.path)) continue;
+    // Build trees
+    const personalTree = buildTree(personalFolders, 'personal', skipPrefixes, currentFolderId, isMove);
+    const teamTreesByCode: { code: string; tree: TreeNode[] }[] = activeTeams.map(tc => ({
+        code: tc,
+        tree: buildTree(
+            teamFolders.filter(f => f.teamCode === tc),
+            `team_${tc}`,
+            skipPrefixes,
+            currentFolderId,
+            isMove,
+        ),
+    }));
 
-            renderNodes.push({
-                id: f.id,
-                name: f.name,
-                path: f.path,
-                depth: f.depth || 1,
-                isRoot: false,
-                isCurrent: f.id === currentFolderId && mode === 'move'
-            });
-        }
-    }
-
-    // Team roots and subfolders
-    if (!currentFolderId || isCurrentTeam) {
-        for (const tc of activeTeams) {
-            renderNodes.push({
-                id: `team_${tc}`,
-                name: tc,
-                path: `${tc}/`,
-                depth: 0,
-                isRoot: true,
-                isCurrent: currentFolderId === `team_${tc}` && mode === 'move'
-            });
-
-            // Team subfolders specifically for this teamCode
-            for (const f of sortedTeam.filter(tf => tf.teamCode === tc)) {
-                if (shouldSkip(f.path)) continue;
-
-                renderNodes.push({
-                    id: f.id,
-                    name: f.name,
-                    path: f.path,
-                    depth: f.depth || 1,
-                    isRoot: false,
-                    isCurrent: f.id === currentFolderId && mode === 'move'
-                });
-            }
-        }
-    }
-
-    /* ─────────────────────────────────────────────────────
-     * Convert flat nodes → tree for the new UI
-     * ───────────────────────────────────────────────────── */
-    const tree = buildTreeFromFlat(renderNodes);
-
-    const handleSelect = (id: string, isCurrent: boolean) => {
-        if (!isCurrent) {
-            setSelectedDestinationId(id);
-        }
-    };
-
-    // Original handleConfirm logic — unchanged
     const handleConfirm = () => {
         if (!selectedDestinationId) return;
 
-        const destNode = renderNodes.find(r => r.id === selectedDestinationId);
-        if (!destNode) return;
+        // Find destination path from all available sources
+        let destPath = "";
+        if (selectedDestinationId === "personal") {
+            destPath = `${userSID}/`;
+        } else if (selectedDestinationId.startsWith("team_")) {
+            destPath = `${selectedDestinationId.replace("team_", "")}/`;
+        } else {
+            const allFolders = [...personalFolders, ...teamFolders];
+            const folder = allFolders.find(f => f.id === selectedDestinationId);
+            if (folder) {
+                destPath = folder.path.endsWith("/") ? folder.path : `${folder.path}/`;
+            }
+        }
 
-        let destPath = destNode.path.endsWith("/") ? destNode.path : `${destNode.path}/`;
         if (destPath.startsWith("gs://")) {
             const parts = destPath.replace("gs://", "").split("/");
             parts.shift();
@@ -335,12 +385,23 @@ export const MoveCopyDialog: React.FC<MoveCopyDialogProps> = ({
         onSubmit(selectedDestinationId, destPath);
     };
 
-    /* ─────────────────────────────────────────────────────
-     * RENDERING — ShareToTeamDialog style
-     * ───────────────────────────────────────────────────── */
+    const isMove_ = mode === 'move';
+    const HeaderIcon = isMove_ ? DriveFileMoveIcon : FileCopyIcon;
+    const headerGradient = isMove_
+        ? "linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%)"
+        : "linear-gradient(135deg, #f3e5f5 0%, #e1bee7 100%)";
+    const headerIconColor = isMove_ ? "#1976d2" : "#7b1fa2";
+    const buttonGradient = isMove_
+        ? "linear-gradient(135deg, #1976d2 0%, #1565c0 100%)"
+        : "linear-gradient(135deg, #7b1fa2 0%, #6a1b9a 100%)";
+    const buttonHoverGradient = isMove_
+        ? "linear-gradient(135deg, #1565c0 0%, #0d47a1 100%)"
+        : "linear-gradient(135deg, #6a1b9a 0%, #4a148c 100%)";
 
-    const isMove = mode === 'move';
-    const HeaderIcon = isMove ? DriveFileMoveIcon : ContentCopyIcon;
+    const showPersonal = !currentFolderId || !isCurrentTeam;
+    const showTeam = !currentFolderId || isCurrentTeam;
+
+    const hasAnyFolders = showPersonal || (showTeam && teamTreesByCode.length > 0);
 
     return (
         <Dialog
@@ -350,35 +411,30 @@ export const MoveCopyDialog: React.FC<MoveCopyDialogProps> = ({
             fullWidth
             PaperProps={{
                 sx: {
-                    borderRadius: '16px',
+                    borderRadius: "16px",
                     minHeight: 380,
-                    overflow: 'hidden',
+                    overflow: "hidden",
                 },
             }}
         >
             {/* Header with icon */}
-            <Box sx={{ px: 3, pt: 2.5, pb: 1, display: 'flex', alignItems: 'center', gap: 1.5 }}>
+            <Box sx={{ px: 3, pt: 2.5, pb: 1, display: "flex", alignItems: "center", gap: 1.5 }}>
                 <Box
                     sx={{
                         width: 40,
                         height: 40,
-                        borderRadius: '12px',
-                        background: isMove
-                            ? 'linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%)'
-                            : 'linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
+                        borderRadius: "12px",
+                        background: headerGradient,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
                         flexShrink: 0,
                     }}
                 >
-                    <HeaderIcon sx={{ fontSize: 22, color: isMove ? '#1976d2' : '#388e3c' }} />
+                    <HeaderIcon sx={{ fontSize: 22, color: headerIconColor }} />
                 </Box>
-                <Typography
-                    variant="h6"
-                    sx={{ fontWeight: 600, fontSize: '1.1rem', lineHeight: 1.3, m: 0 }}
-                >
-                    {isMove ? 'Move to' : 'Copy to'}
+                <Typography variant="h6" sx={{ fontWeight: 600, fontSize: "1.1rem", lineHeight: 1.3, m: 0 }}>
+                    {isMove_ ? "Move to" : "Copy to"}
                 </Typography>
             </Box>
 
@@ -386,73 +442,93 @@ export const MoveCopyDialog: React.FC<MoveCopyDialogProps> = ({
                 <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5 }}>
                     Choose a destination folder:
                 </Typography>
+
                 <Box
                     sx={{
-                        border: '1px solid #e0e0e0',
-                        borderRadius: '12px',
+                        border: "1px solid #e0e0e0",
+                        borderRadius: "12px",
                         height: 360,
-                        overflow: 'auto',
+                        overflow: "auto",
                         py: 0.75,
-                        backgroundColor: '#fafafa',
+                        backgroundColor: "#fafafa",
                     }}
                 >
                     <List dense disablePadding>
-                        {tree.length === 0 ? (
-                            <Box sx={{ p: 3, textAlign: 'center' }}>
-                                <FolderOpenIcon sx={{ fontSize: 40, color: '#bdbdbd', mb: 1 }} />
+                        {!hasAnyFolders ? (
+                            <Box sx={{ p: 3, textAlign: "center" }}>
+                                <FolderOpenIcon sx={{ fontSize: 40, color: "#bdbdbd", mb: 1 }} />
                                 <Typography variant="body2" color="text.secondary">
                                     No folders available.
                                 </Typography>
                             </Box>
                         ) : (
-                            tree.map((tn) => (
-                                <FolderTreeItem
-                                    key={tn.node.id}
-                                    treeNode={tn}
-                                    selectedId={selectedDestinationId}
-                                    onSelect={handleSelect}
-                                    depth={0}
-                                />
-                            ))
+                            <>
+                                {showPersonal && (
+                                    <RootSection
+                                        id="personal"
+                                        label="Personal"
+                                        icon={<PersonIcon sx={{ fontSize: 18, color: "#1976d2" }} />}
+                                        tree={personalTree}
+                                        selectedId={selectedDestinationId}
+                                        onSelect={setSelectedDestinationId}
+                                        isCurrent={currentFolderId === 'personal' && isMove}
+                                    />
+                                )}
+                                {showTeam && teamTreesByCode.map(({ code, tree }) => (
+                                    <RootSection
+                                        key={code}
+                                        id={`team_${code}`}
+                                        label={code}
+                                        icon={<GroupsIcon sx={{ fontSize: 18, color: "#1976d2" }} />}
+                                        tree={tree}
+                                        selectedId={selectedDestinationId}
+                                        onSelect={setSelectedDestinationId}
+                                        isCurrent={currentFolderId === `team_${code}` && isMove}
+                                    />
+                                ))}
+                            </>
                         )}
                     </List>
                 </Box>
             </DialogContent>
 
-            <DialogActions sx={{ px: 3, pb: 2.5, justifyContent: 'flex-end' }}>
-                <Button
-                    onClick={onClose}
-                    disabled={isProcessing}
-                    sx={{
-                        borderRadius: '8px',
-                        textTransform: 'none',
-                        color: '#666',
-                    }}
-                >
-                    Cancel
-                </Button>
-                <Button
-                    onClick={handleConfirm}
-                    variant="contained"
-                    disabled={!selectedDestinationId || selectedDestinationId === currentFolderId || isProcessing}
-                    sx={{
-                        borderRadius: '8px',
-                        textTransform: 'none',
-                        px: 3,
-                        background: isMove
-                            ? 'linear-gradient(135deg, #1976d2 0%, #1565c0 100%)'
-                            : 'linear-gradient(135deg, #388e3c 0%, #2e7d32 100%)',
-                        '&:hover': {
-                            background: isMove
-                                ? 'linear-gradient(135deg, #1565c0 0%, #0d47a1 100%)'
-                                : 'linear-gradient(135deg, #2e7d32 0%, #1b5e20 100%)',
-                        },
-                    }}
-                >
-                    {isProcessing
-                        ? isMove ? 'Moving…' : 'Copying…'
-                        : isMove ? 'Move here' : 'Copy here'}
-                </Button>
+            <DialogActions sx={{ px: 3, pb: 2.5, justifyContent: "space-between" }}>
+                <Typography variant="body2" color="text.secondary">
+                    {movingItemIds.length} item{movingItemIds.length !== 1 ? "s" : ""}
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 1 }}>
+                    <Button
+                        onClick={onClose}
+                        disabled={isProcessing}
+                        sx={{
+                            borderRadius: "8px",
+                            textTransform: "none",
+                            color: "#666",
+                        }}
+                    >
+                        Cancel
+                    </Button>
+                    <Button
+                        onClick={handleConfirm}
+                        variant="contained"
+                        disabled={!selectedDestinationId || selectedDestinationId === currentFolderId || isProcessing}
+                        sx={{
+                            borderRadius: "8px",
+                            textTransform: "none",
+                            px: 3,
+                            background: buttonGradient,
+                            "&:hover": {
+                                background: buttonHoverGradient,
+                            },
+                        }}
+                    >
+                        {isProcessing ? (
+                            <CircularProgress size={20} color="inherit" />
+                        ) : (
+                            isMove_ ? "Move here" : "Copy here"
+                        )}
+                    </Button>
+                </Box>
             </DialogActions>
         </Dialog>
     );
