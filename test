@@ -34,16 +34,23 @@ interface MoveCopyDialogProps {
     movingItemIds?: string[];
 }
 
-/* ── Tree types & helpers ───────────────────────────── */
+/* ── Types ──────────────────────────────────────────── */
 
-interface FolderTreeNode {
+type NodeRender = {
     id: string;
     name: string;
     path: string;
+    depth: number;
     isRoot: boolean;
     isCurrent: boolean;
-    children: FolderTreeNode[];
+};
+
+interface TreeNode {
+    node: NodeRender;
+    children: TreeNode[];
 }
+
+/* ── Helpers ────────────────────────────────────────── */
 
 const getDisplayName = (name: string) => {
     const clean = name.replace(/\/$/, '');
@@ -51,16 +58,44 @@ const getDisplayName = (name: string) => {
     return parts[parts.length - 1];
 };
 
+/**
+ * Convert the flat renderNodes list (with depth) into a proper tree.
+ * Relies on the nodes being in parent-before-child order.
+ */
+const buildTreeFromFlat = (nodes: NodeRender[]): TreeNode[] => {
+    const roots: TreeNode[] = [];
+    const stack: TreeNode[] = [];
+
+    for (const n of nodes) {
+        const treeNode: TreeNode = { node: n, children: [] };
+
+        // Pop the stack until the top is a valid parent (depth < current)
+        while (stack.length > 0 && stack[stack.length - 1].node.depth >= n.depth) {
+            stack.pop();
+        }
+
+        if (stack.length === 0) {
+            roots.push(treeNode);
+        } else {
+            stack[stack.length - 1].children.push(treeNode);
+        }
+        stack.push(treeNode);
+    }
+
+    return roots;
+};
+
 /* ── Recursive tree item ────────────────────────────── */
 
 const FolderTreeItem: React.FC<{
-    node: FolderTreeNode;
+    treeNode: TreeNode;
     selectedId: string | null;
-    onSelect: (id: string) => void;
+    onSelect: (id: string, isCurrent: boolean) => void;
     depth: number;
-}> = ({ node, selectedId, onSelect, depth }) => {
-    const [expanded, setExpanded] = useState(false);
-    const hasChildren = node.children.length > 0;
+}> = ({ treeNode, selectedId, onSelect, depth }) => {
+    const [expanded, setExpanded] = useState(true);
+    const { node } = treeNode;
+    const hasChildren = treeNode.children.length > 0;
     const isSelected = selectedId === node.id;
     const isDisabled = node.isCurrent;
 
@@ -69,7 +104,7 @@ const FolderTreeItem: React.FC<{
             <ListItemButton
                 disabled={isDisabled}
                 selected={isSelected}
-                onClick={() => !isDisabled && onSelect(node.id)}
+                onClick={() => onSelect(node.id, node.isCurrent)}
                 sx={{
                     pl: 2 + depth * 2.5,
                     py: 1,
@@ -160,10 +195,10 @@ const FolderTreeItem: React.FC<{
 
             {hasChildren && (
                 <Collapse in={expanded}>
-                    {node.children.map((child) => (
+                    {treeNode.children.map((child) => (
                         <FolderTreeItem
-                            key={child.id}
-                            node={child}
+                            key={child.node.id}
+                            treeNode={child}
                             selectedId={selectedId}
                             onSelect={onSelect}
                             depth={depth + 1}
@@ -192,147 +227,117 @@ export const MoveCopyDialog: React.FC<MoveCopyDialogProps> = ({
 }) => {
     const [selectedDestinationId, setSelectedDestinationId] = useState<string | null>(null);
 
-    /* ── Build skip list for items being moved ── */
+    /* ─────────────────────────────────────────────────────
+     * DATA LOGIC — identical to the original MoveCopyDialog
+     * ───────────────────────────────────────────────────── */
+
+    const sortFolders = (list: IFolder[]) => [...list]
+        .filter(f => !f.isSystemFolder)
+        .sort((a, b) => {
+            if (a.depth !== b.depth) return (a.depth || 0) - (b.depth || 0);
+            return a.name.localeCompare(b.name);
+        });
+
+    const sortedPersonal = sortFolders(personalFolders);
+    const sortedTeam = sortFolders(teamFolders);
+
+    const renderNodes: NodeRender[] = [];
+
+    const isCurrentTeam = currentFolderId?.startsWith('team_') || teamFolders.some(f => f.id === currentFolderId);
+
+    // Identify paths of folders being moved so we don't allow moving them into themselves or their children
     const skipPrefixes: string[] = [];
     for (const mId of movingItemIds) {
-        const item = [...personalFolders, ...teamFolders].find((f) => f.id === mId);
+        const item = [...personalFolders, ...teamFolders].find(f => f.id === mId);
         if (item) skipPrefixes.push(item.path);
     }
-    const shouldSkip = (path: string) => skipPrefixes.some((p) => path.startsWith(p));
+    const shouldSkip = (path: string) => skipPrefixes.some(p => path.startsWith(p));
 
-    /* ── Build tree from flat folders ── */
-    const buildTree = (): FolderTreeNode[] => {
-        const isCurrentTeam =
-            currentFolderId?.startsWith('team_') ||
-            teamFolders.some((f) => f.id === currentFolderId);
+    // Personal root
+    if (!currentFolderId || !isCurrentTeam) {
+        renderNodes.push({
+            id: 'personal',
+            name: 'Personal Root',
+            path: `${userSID}/`,
+            depth: 0,
+            isRoot: true,
+            isCurrent: currentFolderId === 'personal' && mode === 'move'
+        });
 
-        const roots: FolderTreeNode[] = [];
+        // Personal subfolders
+        for (const f of sortedPersonal) {
+            if (shouldSkip(f.path)) continue;
 
-        // ── Personal section ──
-        if (!currentFolderId || !isCurrentTeam) {
-            const personalRoot: FolderTreeNode = {
-                id: 'personal',
-                name: 'Personal Root',
-                path: `${userSID}/`,
+            renderNodes.push({
+                id: f.id,
+                name: f.name,
+                path: f.path,
+                depth: f.depth || 1,
+                isRoot: false,
+                isCurrent: f.id === currentFolderId && mode === 'move'
+            });
+        }
+    }
+
+    // Team roots and subfolders
+    if (!currentFolderId || isCurrentTeam) {
+        for (const tc of activeTeams) {
+            renderNodes.push({
+                id: `team_${tc}`,
+                name: tc,
+                path: `${tc}/`,
+                depth: 0,
                 isRoot: true,
-                isCurrent: currentFolderId === 'personal' && mode === 'move',
-                children: [],
-            };
+                isCurrent: currentFolderId === `team_${tc}` && mode === 'move'
+            });
 
-            // Build nested personal subfolders
-            const pFolders = personalFolders
-                .filter((f) => !f.isSystemFolder && !shouldSkip(f.path))
-                .sort((a, b) => a.name.localeCompare(b.name));
+            // Team subfolders specifically for this teamCode
+            for (const f of sortedTeam.filter(tf => tf.teamCode === tc)) {
+                if (shouldSkip(f.path)) continue;
 
-            const nodeMap = new Map<string, FolderTreeNode>();
-            nodeMap.set('personal', personalRoot);
-
-            pFolders.forEach((f) => {
-                const node: FolderTreeNode = {
+                renderNodes.push({
                     id: f.id,
                     name: f.name,
                     path: f.path,
+                    depth: f.depth || 1,
                     isRoot: false,
-                    isCurrent: f.id === currentFolderId && mode === 'move',
-                    children: [],
-                };
-                nodeMap.set(f.id, node);
-            });
-
-            pFolders.forEach((f) => {
-                const node = nodeMap.get(f.id)!;
-                const parent = f.parentId ? nodeMap.get(f.parentId) : null;
-                if (parent) {
-                    parent.children.push(node);
-                } else {
-                    personalRoot.children.push(node);
-                }
-            });
-
-            roots.push(personalRoot);
-        }
-
-        // ── Team sections ──
-        if (!currentFolderId || isCurrentTeam) {
-            for (const tc of activeTeams) {
-                const teamRoot: FolderTreeNode = {
-                    id: `team_${tc}`,
-                    name: tc,
-                    path: `${tc}/`,
-                    isRoot: true,
-                    isCurrent: currentFolderId === `team_${tc}` && mode === 'move',
-                    children: [],
-                };
-
-                const tFolders = teamFolders
-                    .filter((f) => !f.isSystemFolder && f.teamCode === tc && !shouldSkip(f.path))
-                    .sort((a, b) => a.name.localeCompare(b.name));
-
-                const nodeMap = new Map<string, FolderTreeNode>();
-                nodeMap.set(`team_${tc}`, teamRoot);
-
-                tFolders.forEach((f) => {
-                    const node: FolderTreeNode = {
-                        id: f.id,
-                        name: f.name,
-                        path: f.path,
-                        isRoot: false,
-                        isCurrent: f.id === currentFolderId && mode === 'move',
-                        children: [],
-                    };
-                    nodeMap.set(f.id, node);
+                    isCurrent: f.id === currentFolderId && mode === 'move'
                 });
-
-                tFolders.forEach((f) => {
-                    const node = nodeMap.get(f.id)!;
-                    const parent = f.parentId ? nodeMap.get(f.parentId) : null;
-                    if (parent) {
-                        parent.children.push(node);
-                    } else {
-                        teamRoot.children.push(node);
-                    }
-                });
-
-                roots.push(teamRoot);
             }
         }
+    }
 
-        return roots;
+    /* ─────────────────────────────────────────────────────
+     * Convert flat nodes → tree for the new UI
+     * ───────────────────────────────────────────────────── */
+    const tree = buildTreeFromFlat(renderNodes);
+
+    const handleSelect = (id: string, isCurrent: boolean) => {
+        if (!isCurrent) {
+            setSelectedDestinationId(id);
+        }
     };
 
-    const tree = buildTree();
-
-    const handleSelect = (id: string) => {
-        setSelectedDestinationId(id);
-    };
-
+    // Original handleConfirm logic — unchanged
     const handleConfirm = () => {
         if (!selectedDestinationId) return;
 
-        // Find the node from the flat folder lists or root
-        const allFolders = [...personalFolders, ...teamFolders];
-        const folder = allFolders.find((f) => f.id === selectedDestinationId);
+        const destNode = renderNodes.find(r => r.id === selectedDestinationId);
+        if (!destNode) return;
 
-        let destPath: string;
-        if (folder) {
-            destPath = folder.path.endsWith('/') ? folder.path : `${folder.path}/`;
-        } else if (selectedDestinationId === 'personal') {
-            destPath = `${userSID}/`;
-        } else if (selectedDestinationId.startsWith('team_')) {
-            const tc = selectedDestinationId.replace('team_', '');
-            destPath = `${tc}/`;
-        } else {
-            return;
-        }
-
-        if (destPath.startsWith('gs://')) {
-            const parts = destPath.replace('gs://', '').split('/');
+        let destPath = destNode.path.endsWith("/") ? destNode.path : `${destNode.path}/`;
+        if (destPath.startsWith("gs://")) {
+            const parts = destPath.replace("gs://", "").split("/");
             parts.shift();
-            destPath = parts.join('/');
+            destPath = parts.join("/");
         }
 
         onSubmit(selectedDestinationId, destPath);
     };
+
+    /* ─────────────────────────────────────────────────────
+     * RENDERING — ShareToTeamDialog style
+     * ───────────────────────────────────────────────────── */
 
     const isMove = mode === 'move';
     const HeaderIcon = isMove ? DriveFileMoveIcon : ContentCopyIcon;
@@ -400,10 +405,10 @@ export const MoveCopyDialog: React.FC<MoveCopyDialogProps> = ({
                                 </Typography>
                             </Box>
                         ) : (
-                            tree.map((node) => (
+                            tree.map((tn) => (
                                 <FolderTreeItem
-                                    key={node.id}
-                                    node={node}
+                                    key={tn.node.id}
+                                    treeNode={tn}
                                     selectedId={selectedDestinationId}
                                     onSelect={handleSelect}
                                     depth={0}
