@@ -1,24 +1,454 @@
-                                            hideType={isRootView}
-                                            onClick={(e) => {
-                                                if (folder.isSystemFolder) {
-                                                    // Single click opens system (root) folders
-                                                    handleFolderDoubleClick(folder);
-                                                } else {
-                                                    // Delay selection for non-system folders so double-click
-                                                    // (navigation) can cancel it without corrupting selection
-                                                    if (folderClickTimerRef.current) clearTimeout(folderClickTimerRef.current);
-                                                    const clickEvent = { shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey } as React.MouseEvent;
-                                                    const itemIdx = startIndex + idx;
-                                                    folderClickTimerRef.current = setTimeout(() => {
-                                                        handleItemClick(clickEvent, folder.id, itemIdx);
-                                                        folderClickTimerRef.current = null;
-                                                    }, 250);
-                                                }
-                                            }}
-                                            onDoubleClick={() => {
-                                                if (folderClickTimerRef.current) {
-                                                    clearTimeout(folderClickTimerRef.current);
-                                                    folderClickTimerRef.current = null;
-                                                }
-                                                handleFolderDoubleClick(folder);
-                                            }}
+import React, { useState } from 'react';
+import {
+    Dialog,
+    DialogContent,
+    DialogActions,
+    Button,
+    List,
+    ListItemButton,
+    ListItemIcon,
+    ListItemText,
+    Typography,
+    Box,
+    Collapse,
+} from '@mui/material';
+import FolderOpenIcon from '@mui/icons-material/FolderOpen';
+import DriveFileMoveIcon from '@mui/icons-material/DriveFileMove';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import HomeIcon from '@mui/icons-material/Home';
+import { IFolder } from '../../interfaces/folderInterfaces';
+
+interface MoveCopyDialogProps {
+    open: boolean;
+    mode: 'move' | 'copy';
+    personalFolders: IFolder[];
+    teamFolders: IFolder[];
+    currentFolderId: string | null;
+    onClose: () => void;
+    onSubmit: (destinationFolderId: string, destinationPath: string) => Promise<void>;
+    isProcessing: boolean;
+    activeTeams: string[];
+    userSID: string;
+    movingItemIds?: string[];
+}
+
+/* ── Tree types & helpers ───────────────────────────── */
+
+interface FolderTreeNode {
+    id: string;
+    name: string;
+    path: string;
+    isRoot: boolean;
+    isCurrent: boolean;
+    children: FolderTreeNode[];
+}
+
+const getDisplayName = (name: string) => {
+    const clean = name.replace(/\/$/, '');
+    const parts = clean.split('/');
+    return parts[parts.length - 1];
+};
+
+/* ── Recursive tree item ────────────────────────────── */
+
+const FolderTreeItem: React.FC<{
+    node: FolderTreeNode;
+    selectedId: string | null;
+    onSelect: (id: string) => void;
+    depth: number;
+}> = ({ node, selectedId, onSelect, depth }) => {
+    const [expanded, setExpanded] = useState(false);
+    const hasChildren = node.children.length > 0;
+    const isSelected = selectedId === node.id;
+    const isDisabled = node.isCurrent;
+
+    return (
+        <>
+            <ListItemButton
+                disabled={isDisabled}
+                selected={isSelected}
+                onClick={() => !isDisabled && onSelect(node.id)}
+                sx={{
+                    pl: 2 + depth * 2.5,
+                    py: 1,
+                    borderRadius: '10px',
+                    mx: 0.75,
+                    mb: 0.5,
+                    transition: 'all 0.15s ease',
+                    '&.Mui-selected': {
+                        backgroundColor: 'rgba(25, 118, 210, 0.08)',
+                        border: '1px solid rgba(25, 118, 210, 0.3)',
+                    },
+                    '&.Mui-selected:hover': {
+                        backgroundColor: 'rgba(25, 118, 210, 0.14)',
+                    },
+                    '&:hover': {
+                        backgroundColor: 'rgba(0, 0, 0, 0.03)',
+                    },
+                    '&.Mui-disabled': {
+                        opacity: 0.45,
+                    },
+                }}
+            >
+                {/* Expand / collapse chevron */}
+                {hasChildren ? (
+                    <ListItemIcon
+                        sx={{ minWidth: 28, cursor: 'pointer' }}
+                        onClick={(e: React.MouseEvent) => {
+                            e.stopPropagation();
+                            setExpanded(!expanded);
+                        }}
+                    >
+                        {expanded ? (
+                            <ExpandMoreIcon fontSize="small" sx={{ color: '#666' }} />
+                        ) : (
+                            <ChevronRightIcon fontSize="small" sx={{ color: '#666' }} />
+                        )}
+                    </ListItemIcon>
+                ) : (
+                    <ListItemIcon sx={{ minWidth: 28 }}>
+                        <Box sx={{ width: 20 }} />
+                    </ListItemIcon>
+                )}
+
+                {/* Folder icon badge */}
+                <ListItemIcon sx={{ minWidth: 36 }}>
+                    <Box
+                        sx={{
+                            width: 30,
+                            height: 30,
+                            borderRadius: '8px',
+                            backgroundColor: isSelected
+                                ? 'rgba(25, 118, 210, 0.12)'
+                                : node.isRoot
+                                    ? 'rgba(66, 165, 245, 0.12)'
+                                    : 'rgba(255, 167, 38, 0.12)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                        }}
+                    >
+                        {node.isRoot ? (
+                            <HomeIcon
+                                sx={{
+                                    fontSize: 18,
+                                    color: isSelected ? '#1976d2' : '#42a5f5',
+                                }}
+                            />
+                        ) : (
+                            <FolderOpenIcon
+                                sx={{
+                                    fontSize: 18,
+                                    color: isSelected ? '#1976d2' : '#ffa726',
+                                }}
+                            />
+                        )}
+                    </Box>
+                </ListItemIcon>
+
+                <ListItemText
+                    primary={getDisplayName(node.name)}
+                    primaryTypographyProps={{
+                        fontSize: '0.875rem',
+                        fontWeight: isSelected ? 600 : 400,
+                        color: isSelected ? '#1976d2' : 'inherit',
+                    }}
+                />
+            </ListItemButton>
+
+            {hasChildren && (
+                <Collapse in={expanded}>
+                    {node.children.map((child) => (
+                        <FolderTreeItem
+                            key={child.id}
+                            node={child}
+                            selectedId={selectedId}
+                            onSelect={onSelect}
+                            depth={depth + 1}
+                        />
+                    ))}
+                </Collapse>
+            )}
+        </>
+    );
+};
+
+/* ── Main dialog ────────────────────────────────────── */
+
+export const MoveCopyDialog: React.FC<MoveCopyDialogProps> = ({
+    open,
+    mode,
+    personalFolders,
+    teamFolders,
+    currentFolderId,
+    onClose,
+    onSubmit,
+    isProcessing,
+    activeTeams,
+    userSID,
+    movingItemIds = [],
+}) => {
+    const [selectedDestinationId, setSelectedDestinationId] = useState<string | null>(null);
+
+    /* ── Build skip list for items being moved ── */
+    const skipPrefixes: string[] = [];
+    for (const mId of movingItemIds) {
+        const item = [...personalFolders, ...teamFolders].find((f) => f.id === mId);
+        if (item) skipPrefixes.push(item.path);
+    }
+    const shouldSkip = (path: string) => skipPrefixes.some((p) => path.startsWith(p));
+
+    /* ── Build tree from flat folders ── */
+    const buildTree = (): FolderTreeNode[] => {
+        const isCurrentTeam =
+            currentFolderId?.startsWith('team_') ||
+            teamFolders.some((f) => f.id === currentFolderId);
+
+        const roots: FolderTreeNode[] = [];
+
+        // ── Personal section ──
+        if (!currentFolderId || !isCurrentTeam) {
+            const personalRoot: FolderTreeNode = {
+                id: 'personal',
+                name: 'Personal Root',
+                path: `${userSID}/`,
+                isRoot: true,
+                isCurrent: currentFolderId === 'personal' && mode === 'move',
+                children: [],
+            };
+
+            // Build nested personal subfolders
+            const pFolders = personalFolders
+                .filter((f) => !f.isSystemFolder && !shouldSkip(f.path))
+                .sort((a, b) => a.name.localeCompare(b.name));
+
+            const nodeMap = new Map<string, FolderTreeNode>();
+            nodeMap.set('personal', personalRoot);
+
+            pFolders.forEach((f) => {
+                const node: FolderTreeNode = {
+                    id: f.id,
+                    name: f.name,
+                    path: f.path,
+                    isRoot: false,
+                    isCurrent: f.id === currentFolderId && mode === 'move',
+                    children: [],
+                };
+                nodeMap.set(f.id, node);
+            });
+
+            pFolders.forEach((f) => {
+                const node = nodeMap.get(f.id)!;
+                const parent = f.parentId ? nodeMap.get(f.parentId) : null;
+                if (parent) {
+                    parent.children.push(node);
+                } else {
+                    personalRoot.children.push(node);
+                }
+            });
+
+            roots.push(personalRoot);
+        }
+
+        // ── Team sections ──
+        if (!currentFolderId || isCurrentTeam) {
+            for (const tc of activeTeams) {
+                const teamRoot: FolderTreeNode = {
+                    id: `team_${tc}`,
+                    name: tc,
+                    path: `${tc}/`,
+                    isRoot: true,
+                    isCurrent: currentFolderId === `team_${tc}` && mode === 'move',
+                    children: [],
+                };
+
+                const tFolders = teamFolders
+                    .filter((f) => !f.isSystemFolder && f.teamCode === tc && !shouldSkip(f.path))
+                    .sort((a, b) => a.name.localeCompare(b.name));
+
+                const nodeMap = new Map<string, FolderTreeNode>();
+                nodeMap.set(`team_${tc}`, teamRoot);
+
+                tFolders.forEach((f) => {
+                    const node: FolderTreeNode = {
+                        id: f.id,
+                        name: f.name,
+                        path: f.path,
+                        isRoot: false,
+                        isCurrent: f.id === currentFolderId && mode === 'move',
+                        children: [],
+                    };
+                    nodeMap.set(f.id, node);
+                });
+
+                tFolders.forEach((f) => {
+                    const node = nodeMap.get(f.id)!;
+                    const parent = f.parentId ? nodeMap.get(f.parentId) : null;
+                    if (parent) {
+                        parent.children.push(node);
+                    } else {
+                        teamRoot.children.push(node);
+                    }
+                });
+
+                roots.push(teamRoot);
+            }
+        }
+
+        return roots;
+    };
+
+    const tree = buildTree();
+
+    const handleSelect = (id: string) => {
+        setSelectedDestinationId(id);
+    };
+
+    const handleConfirm = () => {
+        if (!selectedDestinationId) return;
+
+        // Find the node from the flat folder lists or root
+        const allFolders = [...personalFolders, ...teamFolders];
+        const folder = allFolders.find((f) => f.id === selectedDestinationId);
+
+        let destPath: string;
+        if (folder) {
+            destPath = folder.path.endsWith('/') ? folder.path : `${folder.path}/`;
+        } else if (selectedDestinationId === 'personal') {
+            destPath = `${userSID}/`;
+        } else if (selectedDestinationId.startsWith('team_')) {
+            const tc = selectedDestinationId.replace('team_', '');
+            destPath = `${tc}/`;
+        } else {
+            return;
+        }
+
+        if (destPath.startsWith('gs://')) {
+            const parts = destPath.replace('gs://', '').split('/');
+            parts.shift();
+            destPath = parts.join('/');
+        }
+
+        onSubmit(selectedDestinationId, destPath);
+    };
+
+    const isMove = mode === 'move';
+    const HeaderIcon = isMove ? DriveFileMoveIcon : ContentCopyIcon;
+
+    return (
+        <Dialog
+            open={open}
+            onClose={onClose}
+            maxWidth="xs"
+            fullWidth
+            PaperProps={{
+                sx: {
+                    borderRadius: '16px',
+                    minHeight: 380,
+                    overflow: 'hidden',
+                },
+            }}
+        >
+            {/* Header with icon */}
+            <Box sx={{ px: 3, pt: 2.5, pb: 1, display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                <Box
+                    sx={{
+                        width: 40,
+                        height: 40,
+                        borderRadius: '12px',
+                        background: isMove
+                            ? 'linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%)'
+                            : 'linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flexShrink: 0,
+                    }}
+                >
+                    <HeaderIcon sx={{ fontSize: 22, color: isMove ? '#1976d2' : '#388e3c' }} />
+                </Box>
+                <Typography
+                    variant="h6"
+                    sx={{ fontWeight: 600, fontSize: '1.1rem', lineHeight: 1.3, m: 0 }}
+                >
+                    {isMove ? 'Move to' : 'Copy to'}
+                </Typography>
+            </Box>
+
+            <DialogContent sx={{ pt: 0 }}>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5 }}>
+                    Choose a destination folder:
+                </Typography>
+                <Box
+                    sx={{
+                        border: '1px solid #e0e0e0',
+                        borderRadius: '12px',
+                        height: 360,
+                        overflow: 'auto',
+                        py: 0.75,
+                        backgroundColor: '#fafafa',
+                    }}
+                >
+                    <List dense disablePadding>
+                        {tree.length === 0 ? (
+                            <Box sx={{ p: 3, textAlign: 'center' }}>
+                                <FolderOpenIcon sx={{ fontSize: 40, color: '#bdbdbd', mb: 1 }} />
+                                <Typography variant="body2" color="text.secondary">
+                                    No folders available.
+                                </Typography>
+                            </Box>
+                        ) : (
+                            tree.map((node) => (
+                                <FolderTreeItem
+                                    key={node.id}
+                                    node={node}
+                                    selectedId={selectedDestinationId}
+                                    onSelect={handleSelect}
+                                    depth={0}
+                                />
+                            ))
+                        )}
+                    </List>
+                </Box>
+            </DialogContent>
+
+            <DialogActions sx={{ px: 3, pb: 2.5, justifyContent: 'flex-end' }}>
+                <Button
+                    onClick={onClose}
+                    disabled={isProcessing}
+                    sx={{
+                        borderRadius: '8px',
+                        textTransform: 'none',
+                        color: '#666',
+                    }}
+                >
+                    Cancel
+                </Button>
+                <Button
+                    onClick={handleConfirm}
+                    variant="contained"
+                    disabled={!selectedDestinationId || selectedDestinationId === currentFolderId || isProcessing}
+                    sx={{
+                        borderRadius: '8px',
+                        textTransform: 'none',
+                        px: 3,
+                        background: isMove
+                            ? 'linear-gradient(135deg, #1976d2 0%, #1565c0 100%)'
+                            : 'linear-gradient(135deg, #388e3c 0%, #2e7d32 100%)',
+                        '&:hover': {
+                            background: isMove
+                                ? 'linear-gradient(135deg, #1565c0 0%, #0d47a1 100%)'
+                                : 'linear-gradient(135deg, #2e7d32 0%, #1b5e20 100%)',
+                        },
+                    }}
+                >
+                    {isProcessing
+                        ? isMove ? 'Moving…' : 'Copying…'
+                        : isMove ? 'Move here' : 'Copy here'}
+                </Button>
+            </DialogActions>
+        </Dialog>
+    );
+};
