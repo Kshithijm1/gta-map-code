@@ -1,535 +1,157 @@
-import React, { useState } from 'react';
-import {
-    Dialog,
-    DialogContent,
-    DialogActions,
-    Button,
-    List,
-    ListItemButton,
-    ListItemIcon,
-    ListItemText,
-    Typography,
-    Box,
-    Collapse,
-    CircularProgress,
-} from '@mui/material';
-import FolderOpenIcon from '@mui/icons-material/FolderOpen';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import ChevronRightIcon from '@mui/icons-material/ChevronRight';
-import DriveFileMoveIcon from '@mui/icons-material/DriveFileMove';
-import FileCopyIcon from '@mui/icons-material/FileCopy';
-import PersonIcon from '@mui/icons-material/Person';
-import GroupsIcon from '@mui/icons-material/Groups';
-import { IFolder } from '../../interfaces/folderInterfaces';
-
-interface MoveCopyDialogProps {
-    open: boolean;
-    mode: 'move' | 'copy';
-    personalFolders: IFolder[];
-    teamFolders: IFolder[];
-    currentFolderId: string | null;
-    onClose: () => void;
-    onSubmit: (destinationFolderId: string, destinationPath: string) => Promise<void>;
-    isProcessing: boolean;
-    activeTeams: string[];
-    userSID: string;
-    movingItemIds?: string[];
-}
-
-// ─── Tree helpers ────────────────────────────────────────────
-
-interface TreeNode {
-    id: string;
-    name: string;
-    path: string;
-    isCurrent: boolean;
-    isDisabled: boolean;
-    children: TreeNode[];
-}
-
-const getDisplayName = (name: string) => {
-    const clean = name.replace(/\/$/, "");
-    const parts = clean.split("/");
-    return parts[parts.length - 1];
-};
+import { NextRequest, NextResponse } from "next/server";
+import { Storage } from "@google-cloud/storage";
+import { SECRET_GCS_FILE_UPLOAD_BUCKET, SECRET_PROJECT_ID } from "@/lib/env";
+import logger from "@/lib/logger";
 
 /**
- * Build a tree from a flat folder list, filtering out system folders
- * and folders that should be skipped (self-move prevention).
+ * POST /api/uploadDocuments/shareToTeam
+ * Copies files AND folders from personal to a team subfolder.
+ *
+ * Body: { sID, teamCode, files: string[], folders: string[], targetFolder }
+ *   - files: gs:// URIs or relative paths of single files
+ *   - folders: gs:// URIs or relative paths of folder prefixes (ending in /)
+ *   - targetFolder: full GCS path prefix of the target team subfolder
  */
-const buildTree = (
-    folders: IFolder[],
-    rootId: string,
-    skipPrefixes: string[],
-    currentFolderId: string | null,
-    isMove: boolean,
-): TreeNode[] => {
-    const shouldSkip = (path: string) => skipPrefixes.some(p => path.startsWith(p));
 
-    const filtered = folders
-        .filter(f => !f.isSystemFolder && !shouldSkip(f.path))
-        .sort((a, b) => a.name.localeCompare(b.name));
-
-    const map = new Map<string, TreeNode>();
-    const roots: TreeNode[] = [];
-
-    // Create nodes
-    filtered.forEach(f => {
-        map.set(f.id, {
-            id: f.id,
-            name: getDisplayName(f.name),
-            path: f.path,
-            isCurrent: f.id === currentFolderId && isMove,
-            isDisabled: f.id === currentFolderId && isMove,
-            children: [],
-        });
-    });
-
-    // Assign children
-    filtered.forEach(f => {
-        const node = map.get(f.id)!;
-        if (f.parentId && map.has(f.parentId)) {
-            map.get(f.parentId)!.children.push(node);
-        } else if (f.parentId === rootId || !f.parentId) {
-            roots.push(node);
-        } else {
-            // Parent was skipped or doesn't exist — treat as root
-            roots.push(node);
-        }
-    });
-
-    return roots;
-};
-
-// ─── FolderTreeItem (recursive) ─────────────────────────────
-
-const FolderTreeItem: React.FC<{
-    node: TreeNode;
-    selectedId: string | null;
-    onSelect: (id: string) => void;
-    depth: number;
-}> = ({ node, selectedId, onSelect, depth }) => {
-    const [expanded, setExpanded] = useState(false);
-    const hasChildren = node.children.length > 0;
-    const isSelected = selectedId === node.id;
-
-    return (
-        <>
-            <ListItemButton
-                selected={isSelected}
-                disabled={node.isDisabled}
-                onClick={() => !node.isDisabled && onSelect(node.id)}
-                sx={{
-                    pl: 2 + depth * 2.5,
-                    py: 1,
-                    borderRadius: "10px",
-                    mx: 0.75,
-                    mb: 0.5,
-                    transition: "all 0.15s ease",
-                    "&.Mui-selected": {
-                        backgroundColor: "rgba(25, 118, 210, 0.08)",
-                        border: "1px solid rgba(25, 118, 210, 0.3)",
-                    },
-                    "&.Mui-selected:hover": {
-                        backgroundColor: "rgba(25, 118, 210, 0.14)",
-                    },
-                    "&:hover": {
-                        backgroundColor: "rgba(0, 0, 0, 0.03)",
-                    },
-                }}
-            >
-                {hasChildren ? (
-                    <ListItemIcon
-                        sx={{ minWidth: 28, cursor: "pointer" }}
-                        onClick={(e: React.MouseEvent) => {
-                            e.stopPropagation();
-                            setExpanded(!expanded);
-                        }}
-                    >
-                        {expanded ? (
-                            <ExpandMoreIcon fontSize="small" sx={{ color: "#666" }} />
-                        ) : (
-                            <ChevronRightIcon fontSize="small" sx={{ color: "#666" }} />
-                        )}
-                    </ListItemIcon>
-                ) : (
-                    <ListItemIcon sx={{ minWidth: 28 }}>
-                        <Box sx={{ width: 20 }} />
-                    </ListItemIcon>
-                )}
-                <ListItemIcon sx={{ minWidth: 36 }}>
-                    <Box
-                        sx={{
-                            width: 30,
-                            height: 30,
-                            borderRadius: "8px",
-                            backgroundColor: isSelected
-                                ? "rgba(25, 118, 210, 0.12)"
-                                : node.isDisabled
-                                    ? "rgba(0, 0, 0, 0.06)"
-                                    : "rgba(255, 167, 38, 0.12)",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                        }}
-                    >
-                        <FolderOpenIcon
-                            sx={{
-                                fontSize: 18,
-                                color: isSelected
-                                    ? "#1976d2"
-                                    : node.isDisabled
-                                        ? "#bdbdbd"
-                                        : "#ffa726",
-                            }}
-                        />
-                    </Box>
-                </ListItemIcon>
-                <ListItemText
-                    primary={node.name}
-                    secondary={node.isCurrent ? "(current)" : undefined}
-                    primaryTypographyProps={{
-                        fontSize: "0.875rem",
-                        fontWeight: isSelected ? 600 : 400,
-                        color: isSelected ? "#1976d2" : node.isDisabled ? "#bdbdbd" : "inherit",
-                    }}
-                    secondaryTypographyProps={{
-                        fontSize: "0.75rem",
-                    }}
-                />
-            </ListItemButton>
-            {hasChildren && (
-                <Collapse in={expanded}>
-                    {node.children.map((child) => (
-                        <FolderTreeItem
-                            key={child.id}
-                            node={child}
-                            selectedId={selectedId}
-                            onSelect={onSelect}
-                            depth={depth + 1}
-                        />
-                    ))}
-                </Collapse>
-            )}
-        </>
-    );
-};
-
-// ─── RootSection (Personal / Team) ──────────────────────────
-
-const RootSection: React.FC<{
-    id: string;
-    label: string;
-    icon: React.ReactNode;
-    tree: TreeNode[];
-    selectedId: string | null;
-    onSelect: (id: string) => void;
-    isCurrent: boolean;
-}> = ({ id, label, icon, tree, selectedId, onSelect, isCurrent }) => {
-    const [expanded, setExpanded] = useState(true);
-    const isSelected = selectedId === id;
-    const hasChildren = tree.length > 0;
-
-    return (
-        <>
-            <ListItemButton
-                selected={isSelected}
-                disabled={isCurrent}
-                onClick={() => !isCurrent && onSelect(id)}
-                sx={{
-                    pl: 2,
-                    py: 1.25,
-                    borderRadius: "10px",
-                    mx: 0.75,
-                    mb: 0.5,
-                    transition: "all 0.15s ease",
-                    "&.Mui-selected": {
-                        backgroundColor: "rgba(25, 118, 210, 0.08)",
-                        border: "1px solid rgba(25, 118, 210, 0.3)",
-                    },
-                    "&.Mui-selected:hover": {
-                        backgroundColor: "rgba(25, 118, 210, 0.14)",
-                    },
-                    "&:hover": {
-                        backgroundColor: "rgba(0, 0, 0, 0.03)",
-                    },
-                }}
-            >
-                {hasChildren ? (
-                    <ListItemIcon
-                        sx={{ minWidth: 28, cursor: "pointer" }}
-                        onClick={(e: React.MouseEvent) => {
-                            e.stopPropagation();
-                            setExpanded(!expanded);
-                        }}
-                    >
-                        {expanded ? (
-                            <ExpandMoreIcon fontSize="small" sx={{ color: "#666" }} />
-                        ) : (
-                            <ChevronRightIcon fontSize="small" sx={{ color: "#666" }} />
-                        )}
-                    </ListItemIcon>
-                ) : (
-                    <ListItemIcon sx={{ minWidth: 28 }}>
-                        <Box sx={{ width: 20 }} />
-                    </ListItemIcon>
-                )}
-                <ListItemIcon sx={{ minWidth: 36 }}>
-                    <Box
-                        sx={{
-                            width: 30,
-                            height: 30,
-                            borderRadius: "8px",
-                            backgroundColor: isSelected ? "rgba(25, 118, 210, 0.12)" : "rgba(25, 118, 210, 0.08)",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                        }}
-                    >
-                        {icon}
-                    </Box>
-                </ListItemIcon>
-                <ListItemText
-                    primary={label}
-                    secondary={isCurrent ? "(current)" : undefined}
-                    primaryTypographyProps={{
-                        fontSize: "0.9rem",
-                        fontWeight: isSelected ? 700 : 600,
-                        color: isSelected ? "#1976d2" : isCurrent ? "#bdbdbd" : "inherit",
-                    }}
-                    secondaryTypographyProps={{
-                        fontSize: "0.75rem",
-                    }}
-                />
-            </ListItemButton>
-            {hasChildren && (
-                <Collapse in={expanded}>
-                    {tree.map((node) => (
-                        <FolderTreeItem
-                            key={node.id}
-                            node={node}
-                            selectedId={selectedId}
-                            onSelect={onSelect}
-                            depth={1}
-                        />
-                    ))}
-                </Collapse>
-            )}
-        </>
-    );
-};
-
-// ─── Main Dialog ────────────────────────────────────────────
-
-export const MoveCopyDialog: React.FC<MoveCopyDialogProps> = ({
-    open,
-    mode,
-    personalFolders,
-    teamFolders,
-    currentFolderId,
-    onClose,
-    onSubmit,
-    isProcessing,
-    activeTeams,
-    userSID,
-    movingItemIds = []
-}) => {
-    const [selectedDestinationId, setSelectedDestinationId] = useState<string | null>(null);
-
-    // Identify paths of folders being moved so we don't allow moving into themselves
-    const skipPrefixes: string[] = [];
-    for (const mId of movingItemIds) {
-        const item = [...personalFolders, ...teamFolders].find(f => f.id === mId);
-        if (item) skipPrefixes.push(item.path);
+/** Strip gs:// prefix and bucket name, returning a clean relative GCS path */
+const toRelative = (p: string): string => {
+    if (p.startsWith("gs://")) {
+        const parts = p.replace("gs://", "").split("/");
+        parts.shift(); // remove bucket name
+        return parts.join("/");
     }
+    return p;
+};
 
-    const isMove = mode === 'move';
-    const isCurrentTeam = currentFolderId?.startsWith('team_') || teamFolders.some(f => f.id === currentFolderId);
+/** Collapse any double (or more) slashes into single slashes */
+const cleanPath = (p: string): string => p.replace(/\/\/+/g, "/");
 
-    // Build trees
-    const personalTree = buildTree(personalFolders, 'personal', skipPrefixes, currentFolderId, isMove);
-    const teamTreesByCode: { code: string; tree: TreeNode[] }[] = activeTeams.map(tc => ({
-        code: tc,
-        tree: buildTree(
-            teamFolders.filter(f => f.teamCode === tc),
-            `team_${tc}`,
-            skipPrefixes,
-            currentFolderId,
-            isMove,
-        ),
-    }));
+export async function POST(req: NextRequest) {
+    try {
+        const body = await req.json();
+        const { sID, teamCode, files = [], folders = [], targetFolder } = body;
 
-    const handleConfirm = () => {
-        if (!selectedDestinationId) return;
+        if (!sID || !teamCode || !targetFolder) {
+            return NextResponse.json(
+                { success: false, message: "sID, teamCode, and targetFolder are required" },
+                { status: 400 }
+            );
+        }
 
-        // Find destination path from all available sources
-        let destPath = "";
-        if (selectedDestinationId === "personal") {
-            destPath = `${userSID}/`;
-        } else if (selectedDestinationId.startsWith("team_")) {
-            destPath = `${selectedDestinationId.replace("team_", "")}/`;
-        } else {
-            const allFolders = [...personalFolders, ...teamFolders];
-            const folder = allFolders.find(f => f.id === selectedDestinationId);
-            if (folder) {
-                destPath = folder.path.endsWith("/") ? folder.path : `${folder.path}/`;
+        logger.info(`[ShareToTeam] Request: sID="${sID}", teamCode="${teamCode}", files=${JSON.stringify(files)}, folders=${JSON.stringify(folders)}, targetFolder="${targetFolder}"`);
+
+        const storage = new Storage({ projectId: SECRET_PROJECT_ID });
+        const bucket = storage.bucket(SECRET_GCS_FILE_UPLOAD_BUCKET);
+
+        // Normalize target prefix — ensure single trailing slash, no double slashes
+        let targetPrefix = toRelative(targetFolder);
+        if (!targetPrefix.endsWith("/")) targetPrefix += "/";
+        targetPrefix = cleanPath(targetPrefix);
+
+        logger.info(`[ShareToTeam] Resolved targetPrefix="${targetPrefix}"`);
+
+        // Helper: copy a single file to the target prefix and tag with creatorSID
+        const copyFile = async (relativePath: string, destPath: string): Promise<boolean> => {
+            const cleanDest = cleanPath(destPath);
+            const cleanSrc = cleanPath(relativePath);
+            logger.info(`[ShareToTeam] Attempting copy: "${cleanSrc}" -> "${cleanDest}"`);
+            try {
+                await bucket.file(cleanSrc).copy(bucket.file(cleanDest));
+                try {
+                    await bucket.file(cleanDest).setMetadata({
+                        metadata: {
+                            creatorSID: String(sID)
+                        }
+                    });
+                } catch (metaErr: any) {
+                    logger.error(`[ShareToTeam] Metadata error on ${cleanDest}: ${metaErr?.message}`);
+                }
+                logger.info(`[ShareToTeam] ✓ Copied ${cleanSrc} -> ${cleanDest}`);
+                return true;
+            } catch (err: any) {
+                logger.error(`[ShareToTeam] ✗ Copy error "${cleanSrc}" -> "${cleanDest}": ${err?.message}`);
+                return false;
+            }
+        };
+
+        const results: boolean[] = [];
+
+        // --- Process individual files ---
+        for (const fileId of files) {
+            if (!fileId) continue;
+            const relativePath = toRelative(fileId);
+            const fileName = relativePath.split("/").pop();
+            if (!fileName) continue;
+            const destPath = cleanPath(`${targetPrefix}${fileName}`);
+            results.push(await copyFile(relativePath, destPath));
+        }
+
+        // --- Process folders (recursive) ---
+        for (const folderId of folders) {
+            if (!folderId) continue;
+            let folderPrefix = toRelative(folderId);
+            if (!folderPrefix.endsWith("/")) folderPrefix += "/";
+            folderPrefix = cleanPath(folderPrefix);
+
+            // The folder name is the last non-empty segment of its prefix
+            const segments = folderPrefix.replace(/\/$/, "").split("/");
+            const folderName = segments[segments.length - 1];
+            const destFolderPrefix = cleanPath(`${targetPrefix}${folderName}/`);
+
+            logger.info(`[ShareToTeam] Processing folder: prefix="${folderPrefix}", folderName="${folderName}", destPrefix="${destFolderPrefix}"`);
+
+            try {
+                // Create destination folder marker with creatorSID
+                await bucket.file(destFolderPrefix).save("", {
+                    metadata: { contentType: "application/x-directory", metadata: { creatorSID: sID } }
+                });
+
+                // List and copy all objects under the source folder prefix
+                const [nestedFiles] = await bucket.getFiles({ prefix: folderPrefix });
+                logger.info(`[ShareToTeam] Found ${nestedFiles.length} objects under "${folderPrefix}"`);
+
+                for (const f of nestedFiles) {
+                    const tail = f.name.substring(folderPrefix.length);
+                    if (!tail) continue; // skip the source folder's own marker
+                    if (f.name.endsWith("/")) {
+                        // Copy subfolder markers so nested folders appear in the frontend
+                        const destMarker = cleanPath(`${destFolderPrefix}${tail}`);
+                        try {
+                            await bucket.file(destMarker).save("", {
+                                metadata: { contentType: "application/x-directory", metadata: { creatorSID: sID } }
+                            });
+                            logger.info(`[ShareToTeam] ✓ Created subfolder marker: ${destMarker}`);
+                        } catch (markerErr: any) {
+                            logger.error(`[ShareToTeam] ✗ Subfolder marker error "${destMarker}": ${markerErr?.message}`);
+                        }
+                        continue;
+                    }
+                    const destPath = cleanPath(`${destFolderPrefix}${tail}`);
+                    results.push(await copyFile(f.name, destPath));
+                }
+                logger.info(`[ShareToTeam] Shared folder ${folderPrefix} -> ${destFolderPrefix}`);
+            } catch (err: any) {
+                logger.error(`[ShareToTeam] Folder error ${folderId}: ${err?.message}`);
+                results.push(false);
             }
         }
 
-        if (destPath.startsWith("gs://")) {
-            const parts = destPath.replace("gs://", "").split("/");
-            parts.shift();
-            destPath = parts.join("/");
-        }
+        const successCount = results.filter(Boolean).length;
+        const totalCount = results.length;
 
-        onSubmit(selectedDestinationId, destPath);
-    };
+        logger.info(`[ShareToTeam] Done: ${successCount}/${totalCount} items copied successfully`);
 
-    const isMove_ = mode === 'move';
-    const HeaderIcon = isMove_ ? DriveFileMoveIcon : FileCopyIcon;
-    const headerGradient = isMove_
-        ? "linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%)"
-        : "linear-gradient(135deg, #f3e5f5 0%, #e1bee7 100%)";
-    const headerIconColor = isMove_ ? "#1976d2" : "#7b1fa2";
-    const buttonGradient = isMove_
-        ? "linear-gradient(135deg, #1976d2 0%, #1565c0 100%)"
-        : "linear-gradient(135deg, #7b1fa2 0%, #6a1b9a 100%)";
-    const buttonHoverGradient = isMove_
-        ? "linear-gradient(135deg, #1565c0 0%, #0d47a1 100%)"
-        : "linear-gradient(135deg, #6a1b9a 0%, #4a148c 100%)";
+        return NextResponse.json({
+            success: successCount > 0,
+            message: `Shared ${successCount}/${totalCount} item(s)`,
+            copiedCount: successCount,
+        }, { status: 200 });
 
-    const showPersonal = !currentFolderId || !isCurrentTeam;
-    const showTeam = !currentFolderId || isCurrentTeam;
-
-    const hasAnyFolders = showPersonal || (showTeam && teamTreesByCode.length > 0);
-
-    return (
-        <Dialog
-            open={open}
-            onClose={onClose}
-            maxWidth="xs"
-            fullWidth
-            PaperProps={{
-                sx: {
-                    borderRadius: "16px",
-                    minHeight: 380,
-                    overflow: "hidden",
-                },
-            }}
-        >
-            {/* Header with icon */}
-            <Box sx={{ px: 3, pt: 2.5, pb: 1, display: "flex", alignItems: "center", gap: 1.5 }}>
-                <Box
-                    sx={{
-                        width: 40,
-                        height: 40,
-                        borderRadius: "12px",
-                        background: headerGradient,
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        flexShrink: 0,
-                    }}
-                >
-                    <HeaderIcon sx={{ fontSize: 22, color: headerIconColor }} />
-                </Box>
-                <Typography variant="h6" sx={{ fontWeight: 600, fontSize: "1.1rem", lineHeight: 1.3, m: 0 }}>
-                    {isMove_ ? "Move to" : "Copy to"}
-                </Typography>
-            </Box>
-
-            <DialogContent sx={{ pt: 0 }}>
-                <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5 }}>
-                    Choose a destination folder:
-                </Typography>
-
-                <Box
-                    sx={{
-                        border: "1px solid #e0e0e0",
-                        borderRadius: "12px",
-                        height: 360,
-                        overflow: "auto",
-                        py: 0.75,
-                        backgroundColor: "#fafafa",
-                    }}
-                >
-                    <List dense disablePadding>
-                        {!hasAnyFolders ? (
-                            <Box sx={{ p: 3, textAlign: "center" }}>
-                                <FolderOpenIcon sx={{ fontSize: 40, color: "#bdbdbd", mb: 1 }} />
-                                <Typography variant="body2" color="text.secondary">
-                                    No folders available.
-                                </Typography>
-                            </Box>
-                        ) : (
-                            <>
-                                {showPersonal && (
-                                    <RootSection
-                                        id="personal"
-                                        label="Personal"
-                                        icon={<PersonIcon sx={{ fontSize: 18, color: "#1976d2" }} />}
-                                        tree={personalTree}
-                                        selectedId={selectedDestinationId}
-                                        onSelect={setSelectedDestinationId}
-                                        isCurrent={currentFolderId === 'personal' && isMove}
-                                    />
-                                )}
-                                {showTeam && teamTreesByCode.map(({ code, tree }) => (
-                                    <RootSection
-                                        key={code}
-                                        id={`team_${code}`}
-                                        label={code}
-                                        icon={<GroupsIcon sx={{ fontSize: 18, color: "#1976d2" }} />}
-                                        tree={tree}
-                                        selectedId={selectedDestinationId}
-                                        onSelect={setSelectedDestinationId}
-                                        isCurrent={currentFolderId === `team_${code}` && isMove}
-                                    />
-                                ))}
-                            </>
-                        )}
-                    </List>
-                </Box>
-            </DialogContent>
-
-            <DialogActions sx={{ px: 3, pb: 2.5, justifyContent: "space-between" }}>
-                <Typography variant="body2" color="text.secondary">
-                    {movingItemIds.length} item{movingItemIds.length !== 1 ? "s" : ""}
-                </Typography>
-                <Box sx={{ display: 'flex', gap: 1 }}>
-                    <Button
-                        onClick={onClose}
-                        disabled={isProcessing}
-                        sx={{
-                            borderRadius: "8px",
-                            textTransform: "none",
-                            color: "#666",
-                        }}
-                    >
-                        Cancel
-                    </Button>
-                    <Button
-                        onClick={handleConfirm}
-                        variant="contained"
-                        disabled={!selectedDestinationId || selectedDestinationId === currentFolderId || isProcessing}
-                        sx={{
-                            borderRadius: "8px",
-                            textTransform: "none",
-                            px: 3,
-                            background: buttonGradient,
-                            "&:hover": {
-                                background: buttonHoverGradient,
-                            },
-                        }}
-                    >
-                        {isProcessing ? (
-                            <CircularProgress size={20} color="inherit" />
-                        ) : (
-                            isMove_ ? "Move here" : "Copy here"
-                        )}
-                    </Button>
-                </Box>
-            </DialogActions>
-        </Dialog>
-    );
-};
+    } catch (error: unknown) {
+        logger.error(`[ShareToTeam] Internal Error: ${error}`);
+        return NextResponse.json(
+            { success: false, message: "Internal server error" },
+            { status: 500 }
+        );
+    }
+}
