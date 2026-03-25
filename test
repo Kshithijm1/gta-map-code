@@ -1,157 +1,55 @@
-import { NextRequest, NextResponse } from "next/server";
-import { Storage } from "@google-cloud/storage";
-import { SECRET_GCS_FILE_UPLOAD_BUCKET, SECRET_PROJECT_ID } from "@/lib/env";
-import logger from "@/lib/logger";
+    // Derive implicit folders from file paths — ensures nested folders appear
+    // even when explicit folder marker objects are missing (e.g. from older shares)
+    const existingFolderPaths = new Set(folderData.map(f => f.gcsPrefix));
+    const implicitFolders: typeof folderData = [];
 
-/**
- * POST /api/uploadDocuments/shareToTeam
- * Copies files AND folders from personal to a team subfolder.
- *
- * Body: { sID, teamCode, files: string[], folders: string[], targetFolder }
- *   - files: gs:// URIs or relative paths of single files
- *   - folders: gs:// URIs or relative paths of folder prefixes (ending in /)
- *   - targetFolder: full GCS path prefix of the target team subfolder
- */
-
-/** Strip gs:// prefix and bucket name, returning a clean relative GCS path */
-const toRelative = (p: string): string => {
-    if (p.startsWith("gs://")) {
-        const parts = p.replace("gs://", "").split("/");
-        parts.shift(); // remove bucket name
-        return parts.join("/");
+    for (const file of filteredFiles) {
+      const segments = file.name.split("/");
+      // segments: [sID, folder1, folder2, ..., filename]
+      // We need intermediate folders: sID/folder1/, sID/folder1/folder2/, etc.
+      // Skip the first segment (sID root) and last segment (filename)
+      for (let i = 2; i < segments.length; i++) {
+        const folderGcsPath = segments.slice(0, i).join("/") + "/";
+        if (folderGcsPath === `${sID}/`) continue; // skip the root prefix
+        if (existingFolderPaths.has(folderGcsPath)) continue; // already known
+        existingFolderPaths.add(folderGcsPath);
+        const folderName = segments[i - 1];
+        implicitFolders.push({
+          id: `gs://${bucket}/${folderGcsPath}`,
+          name: folderName,
+          path: `gs://${bucket}/${folderGcsPath}`,
+          gcsPrefix: folderGcsPath,
+          creatorSID: null,
+          createdAt: null,
+        });
+      }
     }
-    return p;
+
+    if (implicitFolders.length > 0) {
+      logger.info(`[FetchGcsFiles] Discovered ${implicitFolders.length} implicit folder(s) from file paths: ${implicitFolders.map(f => f.gcsPrefix).join(", ")}`);
+    }
+
+    const allFolders = [...folderData, ...implicitFolders];
+
+    return Response.json(
+      {
+        success: true,
+        count: fileData.length,
+        files: fileData,
+        folders: allFolders,
+      },
+      { status: 200, statusText: "Successfully fetched files" }
+    );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } catch (error: any) {
+    logger.error(`Error fetching files ${error}`);
+    return Response.json(
+      {
+        success: false,
+        count: 0,
+        files: [],
+      },
+      { status: 500, statusText: "Error in the API" }
+    );
+  }
 };
-
-/** Collapse any double (or more) slashes into single slashes */
-const cleanPath = (p: string): string => p.replace(/\/\/+/g, "/");
-
-export async function POST(req: NextRequest) {
-    try {
-        const body = await req.json();
-        const { sID, teamCode, files = [], folders = [], targetFolder } = body;
-
-        if (!sID || !teamCode || !targetFolder) {
-            return NextResponse.json(
-                { success: false, message: "sID, teamCode, and targetFolder are required" },
-                { status: 400 }
-            );
-        }
-
-        logger.info(`[ShareToTeam] Request: sID="${sID}", teamCode="${teamCode}", files=${JSON.stringify(files)}, folders=${JSON.stringify(folders)}, targetFolder="${targetFolder}"`);
-
-        const storage = new Storage({ projectId: SECRET_PROJECT_ID });
-        const bucket = storage.bucket(SECRET_GCS_FILE_UPLOAD_BUCKET);
-
-        // Normalize target prefix — ensure single trailing slash, no double slashes
-        let targetPrefix = toRelative(targetFolder);
-        if (!targetPrefix.endsWith("/")) targetPrefix += "/";
-        targetPrefix = cleanPath(targetPrefix);
-
-        logger.info(`[ShareToTeam] Resolved targetPrefix="${targetPrefix}"`);
-
-        // Helper: copy a single file to the target prefix and tag with creatorSID
-        const copyFile = async (relativePath: string, destPath: string): Promise<boolean> => {
-            const cleanDest = cleanPath(destPath);
-            const cleanSrc = cleanPath(relativePath);
-            logger.info(`[ShareToTeam] Attempting copy: "${cleanSrc}" -> "${cleanDest}"`);
-            try {
-                await bucket.file(cleanSrc).copy(bucket.file(cleanDest));
-                try {
-                    await bucket.file(cleanDest).setMetadata({
-                        metadata: {
-                            creatorSID: String(sID)
-                        }
-                    });
-                } catch (metaErr: any) {
-                    logger.error(`[ShareToTeam] Metadata error on ${cleanDest}: ${metaErr?.message}`);
-                }
-                logger.info(`[ShareToTeam] ✓ Copied ${cleanSrc} -> ${cleanDest}`);
-                return true;
-            } catch (err: any) {
-                logger.error(`[ShareToTeam] ✗ Copy error "${cleanSrc}" -> "${cleanDest}": ${err?.message}`);
-                return false;
-            }
-        };
-
-        const results: boolean[] = [];
-
-        // --- Process individual files ---
-        for (const fileId of files) {
-            if (!fileId) continue;
-            const relativePath = toRelative(fileId);
-            const fileName = relativePath.split("/").pop();
-            if (!fileName) continue;
-            const destPath = cleanPath(`${targetPrefix}${fileName}`);
-            results.push(await copyFile(relativePath, destPath));
-        }
-
-        // --- Process folders (recursive) ---
-        for (const folderId of folders) {
-            if (!folderId) continue;
-            let folderPrefix = toRelative(folderId);
-            if (!folderPrefix.endsWith("/")) folderPrefix += "/";
-            folderPrefix = cleanPath(folderPrefix);
-
-            // The folder name is the last non-empty segment of its prefix
-            const segments = folderPrefix.replace(/\/$/, "").split("/");
-            const folderName = segments[segments.length - 1];
-            const destFolderPrefix = cleanPath(`${targetPrefix}${folderName}/`);
-
-            logger.info(`[ShareToTeam] Processing folder: prefix="${folderPrefix}", folderName="${folderName}", destPrefix="${destFolderPrefix}"`);
-
-            try {
-                // Create destination folder marker with creatorSID
-                await bucket.file(destFolderPrefix).save("", {
-                    metadata: { contentType: "application/x-directory", metadata: { creatorSID: sID } }
-                });
-
-                // List and copy all objects under the source folder prefix
-                const [nestedFiles] = await bucket.getFiles({ prefix: folderPrefix });
-                logger.info(`[ShareToTeam] Found ${nestedFiles.length} objects under "${folderPrefix}"`);
-
-                for (const f of nestedFiles) {
-                    const tail = f.name.substring(folderPrefix.length);
-                    if (!tail) continue; // skip the source folder's own marker
-                    if (f.name.endsWith("/")) {
-                        // Copy subfolder markers so nested folders appear in the frontend
-                        const destMarker = cleanPath(`${destFolderPrefix}${tail}`);
-                        try {
-                            await bucket.file(destMarker).save("", {
-                                metadata: { contentType: "application/x-directory", metadata: { creatorSID: sID } }
-                            });
-                            logger.info(`[ShareToTeam] ✓ Created subfolder marker: ${destMarker}`);
-                        } catch (markerErr: any) {
-                            logger.error(`[ShareToTeam] ✗ Subfolder marker error "${destMarker}": ${markerErr?.message}`);
-                        }
-                        continue;
-                    }
-                    const destPath = cleanPath(`${destFolderPrefix}${tail}`);
-                    results.push(await copyFile(f.name, destPath));
-                }
-                logger.info(`[ShareToTeam] Shared folder ${folderPrefix} -> ${destFolderPrefix}`);
-            } catch (err: any) {
-                logger.error(`[ShareToTeam] Folder error ${folderId}: ${err?.message}`);
-                results.push(false);
-            }
-        }
-
-        const successCount = results.filter(Boolean).length;
-        const totalCount = results.length;
-
-        logger.info(`[ShareToTeam] Done: ${successCount}/${totalCount} items copied successfully`);
-
-        return NextResponse.json({
-            success: successCount > 0,
-            message: `Shared ${successCount}/${totalCount} item(s)`,
-            copiedCount: successCount,
-        }, { status: 200 });
-
-    } catch (error: unknown) {
-        logger.error(`[ShareToTeam] Internal Error: ${error}`);
-        return NextResponse.json(
-            { success: false, message: "Internal server error" },
-            { status: 500 }
-        );
-    }
-}
