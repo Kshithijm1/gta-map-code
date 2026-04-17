@@ -1,49 +1,9 @@
-import { FileWithMetadata, ICustomTag, ITags } from "@/interface";
-import { Box, Chip, SxProps, Theme, Typography } from "@mui/material";
-import React from "react";
+  const [customTagInput, setCustomTagInput] = useState("");
 
-interface IFileTags {
-  file: FileWithMetadata;
-  handleRemoveTag: (tag: ITags) => void;
-  handleRemoveCustomTag: (tag: ICustomTag) => void;
-  chipSx?: SxProps<Theme>;
-}
-const FileTags: React.FC<IFileTags> = (props) => {
-  const { file, handleRemoveTag, handleRemoveCustomTag, chipSx } = props;
-  const tickerTags = file.metadata.tags as ITags[];
-  const customTags = (file.metadata.customTags as ICustomTag[]) ?? [];
-  const hasAny = tickerTags.length > 0 || customTags.length > 0;
-  if (!hasAny) return null;
-  return (
-    <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
-      {tickerTags.map((tag) => (
-        <Chip
-          sx={{ marginTop: 1, marginLeft: 1, ...chipSx }}
-          key={tag.company_id}
-          label={`${tag.code} - ${tag.name}`}
-          variant="outlined"
-          onDelete={() => handleRemoveTag(tag)}
-        />
-      ))}
-      {customTags.map((tag, i) => (
-        <Chip
-          sx={{ marginTop: 1, marginLeft: 1, ...chipSx }}
-          key={`custom-${i}-${tag.label}`}
-          label={
-            <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
-              <Typography variant="caption" sx={{ fontWeight: 600, color: "secondary.main" }}>
-                #
-              </Typography>
-              {tag.label}
-            </Box>
-          }
-          color="secondary"
-          variant="outlined"
-          onDelete={() => handleRemoveCustomTag(tag)}
-        />
-      ))}
-    </Box>
-  );
-};
-
-export default FileTags;
+  const handleAddCustomTag = () => {
+    const trimmed = customTagInput.trim();
+    if (trimmed) {
+      addCustomTag(index, trimmed);
+      setCustomTagInput("");
+    }
+  };
