@@ -1,55 +1,49 @@
-    // Derive implicit folders from file paths — ensures nested folders appear
-    // even when explicit folder marker objects are missing (e.g. from older shares)
-    const existingFolderPaths = new Set(folderData.map(f => f.gcsPrefix));
-    const implicitFolders: typeof folderData = [];
+import { FileWithMetadata, ICustomTag, ITags } from "@/interface";
+import { Box, Chip, SxProps, Theme, Typography } from "@mui/material";
+import React from "react";
 
-    for (const file of filteredFiles) {
-      const segments = file.name.split("/");
-      // segments: [sID, folder1, folder2, ..., filename]
-      // We need intermediate folders: sID/folder1/, sID/folder1/folder2/, etc.
-      // Skip the first segment (sID root) and last segment (filename)
-      for (let i = 2; i < segments.length; i++) {
-        const folderGcsPath = segments.slice(0, i).join("/") + "/";
-        if (folderGcsPath === `${sID}/`) continue; // skip the root prefix
-        if (existingFolderPaths.has(folderGcsPath)) continue; // already known
-        existingFolderPaths.add(folderGcsPath);
-        const folderName = segments[i - 1];
-        implicitFolders.push({
-          id: `gs://${bucket}/${folderGcsPath}`,
-          name: folderName,
-          path: `gs://${bucket}/${folderGcsPath}`,
-          gcsPrefix: folderGcsPath,
-          creatorSID: null,
-          createdAt: null,
-        });
-      }
-    }
-
-    if (implicitFolders.length > 0) {
-      logger.info(`[FetchGcsFiles] Discovered ${implicitFolders.length} implicit folder(s) from file paths: ${implicitFolders.map(f => f.gcsPrefix).join(", ")}`);
-    }
-
-    const allFolders = [...folderData, ...implicitFolders];
-
-    return Response.json(
-      {
-        success: true,
-        count: fileData.length,
-        files: fileData,
-        folders: allFolders,
-      },
-      { status: 200, statusText: "Successfully fetched files" }
-    );
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } catch (error: any) {
-    logger.error(`Error fetching files ${error}`);
-    return Response.json(
-      {
-        success: false,
-        count: 0,
-        files: [],
-      },
-      { status: 500, statusText: "Error in the API" }
-    );
-  }
+interface IFileTags {
+  file: FileWithMetadata;
+  handleRemoveTag: (tag: ITags) => void;
+  handleRemoveCustomTag: (tag: ICustomTag) => void;
+  chipSx?: SxProps<Theme>;
+}
+const FileTags: React.FC<IFileTags> = (props) => {
+  const { file, handleRemoveTag, handleRemoveCustomTag, chipSx } = props;
+  const tickerTags = file.metadata.tags as ITags[];
+  const customTags = (file.metadata.customTags as ICustomTag[]) ?? [];
+  const hasAny = tickerTags.length > 0 || customTags.length > 0;
+  if (!hasAny) return null;
+  return (
+    <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
+      {tickerTags.map((tag) => (
+        <Chip
+          sx={{ marginTop: 1, marginLeft: 1, ...chipSx }}
+          key={tag.company_id}
+          label={`${tag.code} - ${tag.name}`}
+          variant="outlined"
+          onDelete={() => handleRemoveTag(tag)}
+        />
+      ))}
+      {customTags.map((tag, i) => (
+        <Chip
+          sx={{ marginTop: 1, marginLeft: 1, ...chipSx }}
+          key={`custom-${i}-${tag.label}`}
+          label={
+            <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+              <Typography variant="caption" sx={{ fontWeight: 600, color: "secondary.main" }}>
+                #
+              </Typography>
+              {tag.label}
+            </Box>
+          }
+          color="secondary"
+          variant="outlined"
+          onDelete={() => handleRemoveCustomTag(tag)}
+        />
+      ))}
+    </Box>
+  );
 };
+
+export default FileTags;
