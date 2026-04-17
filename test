@@ -1,9 +1,18 @@
-  const [customTagInput, setCustomTagInput] = useState("");
-
-  const handleAddCustomTag = () => {
-    const trimmed = customTagInput.trim();
-    if (trimmed) {
-      addCustomTag(index, trimmed);
-      setCustomTagInput("");
-    }
-  };
+        <Divider orientation="vertical" flexItem sx={{ mx: 1, height: 28, alignSelf: "center" }} />
+        <TextField
+          size="small"
+          placeholder="Custom tag"
+          value={customTagInput}
+          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCustomTagInput(e.target.value)}
+          onKeyDown={(e: React.KeyboardEvent<HTMLDivElement>) => { if (e.key === "Enter") handleAddCustomTag(); }}
+          sx={{ flex: "0 0 130px", width: "130px" }}
+          InputProps={{ startAdornment: <LabelOutlinedIcon fontSize="small" sx={{ mr: 0.5, color: "text.secondary" }} /> }}
+        />
+        <IconButton
+          size="small"
+          aria-label="add custom tag"
+          color="secondary"
+          onClick={handleAddCustomTag}
+        >
+          <AddIcon />
+        </IconButton>
